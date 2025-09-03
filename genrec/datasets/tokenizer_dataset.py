@@ -1,5 +1,5 @@
-from transformers import AutoModel, AutoTokenizer
-from torch.utils.data import Dataset
+from transformers import AutoModel, AutoTokenizer, AutoConfig, T5EncoderModel
+from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 import pickle
 import torch
@@ -44,10 +44,38 @@ class ItemEmbeddingDataset(Dataset):
         
         # Set device
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        if 't5' in self.text_encoder_model_name.lower():
+            self.text_model = T5EncoderModel.from_pretrained(self.text_encoder_model_name)
+            self.model_config = self.text_model.config
+        else:
+            model_config = AutoConfig.from_pretrained(self.text_encoder_model_name)
+            if model_config.is_encoder_decoder:
+                # Load the full model and extract the encoder
+                full_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+                self.text_model = full_model.encoder
+                self.model_config = full_model.config
+            else:
+                # Load encoder-only models directly
+                self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+                self.model_config = self.text_model.config
+        # Load model config first to check architecture
+        # model_config = AutoConfig.from_pretrained(self.text_encoder_model_name)
+        # self.is_encoder_decoder = model_config.is_encoder_decoder
         
         # Load text encoder model and tokenizer
         self.text_tokenizer = AutoTokenizer.from_pretrained(self.text_encoder_model_name)
-        self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+        
+        # For encoder-decoder models, we'll only use the encoder part
+        # if self.is_encoder_decoder:
+        #     # Get the encoder part of the model
+        #     full_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+        #     self.text_model = full_model.encoder
+        #     # Set model config for embedding dimension
+        #     self.model_config = full_model.config
+        # else:
+        #     self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+        #     self.model_config = self.text_model.config
+            
         self.text_model.to(self.device)
         self.text_model.eval()
 
@@ -119,7 +147,12 @@ class ItemEmbeddingDataset(Dataset):
         Raises:
             ValueError: If an unknown embedding strategy is specified
         """
-        last_hidden_state = model_outputs.last_hidden_state
+        # Handle different output formats
+        if hasattr(model_outputs, 'last_hidden_state'):
+            last_hidden_state = model_outputs.last_hidden_state
+        else:
+            # For some models, the output might be a tuple
+            last_hidden_state = model_outputs[0]
         
         if self.embedding_strategy == "mean_pooling":
             # Mean pooling with attention mask
@@ -220,7 +253,7 @@ class ItemEmbeddingDataset(Dataset):
         item_id = self.item_ids[index]
         
         # Get item embedding and text
-        embedding = self.item_embeddings.get(item_id, np.zeros(self.text_model.config.hidden_size))
+        embedding = self.item_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
         text = self.item_reviews.get(item_id, "")
         
         # Convert to tensor
@@ -325,5 +358,3 @@ def create_item_dataloader(
     )
     
     return dataset, dataloader
-
-

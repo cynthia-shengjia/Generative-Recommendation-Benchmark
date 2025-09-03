@@ -6,9 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-from Quant.rqvae import RQVAE
+from .Quant.rqvae import RQVAE
 from collections import defaultdict 
-from GRTokenizer import AbstractTokenizer
+from .GRTokenizer import AbstractTokenizer
 import logging
 class TigerTokenizer(AbstractTokenizer, nn.Module):
     """
@@ -43,6 +43,7 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
             quant_loss_weight=self.config['quant_loss_weight'],
             kmeans_init=self.config['rq_kmeans_init'],
             kmeans_iters=self.config['kmeans_iters'],
+            commitment_beta=self.config['commitment_beta'],
         )
         self.save_path = self.config['save_path']
     def forward(self, embeddings: torch.Tensor):

@@ -18,9 +18,9 @@ class RQVAE(nn.Module):
                  quant_loss_weight=1.0,
                  kmeans_init=False,
                  kmeans_iters=100,
+                 commitment_beta=0.25,
                  ):
         super(RQVAE, self).__init__()
-
         self.in_dim = in_dim
         self.num_emb_list = num_emb_list
         self.e_dim = e_dim
@@ -31,12 +31,13 @@ class RQVAE(nn.Module):
         self.quant_loss_weight = quant_loss_weight
         self.kmeans_init = kmeans_init
         self.kmeans_iters = kmeans_iters
-
+        self.commitment_beta = commitment_beta
         self.encode_layer_dims = [self.in_dim] + self.layers + [self.e_dim]
         self.encoder = MLPLayers(layers=self.encode_layer_dims,
                                  dropout=self.dropout_prob, bn=self.bn)
 
         self.rq = ResidualVectorQuantizer(num_emb_list, e_dim,
+                                          commitment_beta=self.commitment_beta,
                                           kmeans_init=self.kmeans_init,
                                           kmeans_iters=self.kmeans_iters,
                                           )
@@ -136,7 +137,7 @@ class MLPLayers(nn.Module):
         return self.mlp_layers(input_feature)
 
 class ResidualVectorQuantizer(nn.Module):
-    def __init__(self, n_e_list, e_dim,
+    def __init__(self, n_e_list, e_dim,commitment_beta=0.25,
                  kmeans_init=False, kmeans_iters=100):
         super().__init__()
         self.n_e_list = n_e_list
@@ -144,8 +145,9 @@ class ResidualVectorQuantizer(nn.Module):
         self.num_quantizers = len(n_e_list)
         self.kmeans_init = kmeans_init
         self.kmeans_iters = kmeans_iters
-
+        self.commitment_beta = commitment_beta
         self.vq_layers = nn.ModuleList([VectorQuantizer(n_e, e_dim,
+                                                        mu = self.commitment_beta,
                                                         kmeans_init=self.kmeans_init,
                                                         kmeans_iters=self.kmeans_iters
                                                         )
@@ -212,7 +214,7 @@ class VectorQuantizer(nn.Module):
         return z_q
 
     def init_emb(self, data):
-        centers, _ = self.constrained_km(data, 256)
+        centers, _ = self.constrained_km(data, self.n_e)
         self.embedding.weight.data.copy_(centers)
         self.initted = True
 

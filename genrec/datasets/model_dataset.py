@@ -5,95 +5,48 @@ import pickle
 import torch
 import numpy as np
 from typing import Callable, Optional, Dict, List, Any, Tuple, Union
-
+from genrec.tokenizers.GRTokenizer import AbstractTokenizer
 
 class TokenizerAmazonReviews2014Dataset(Dataset):
-    """
-    A dataset class for loading and processing Amazon reviews data with generic text encoders.
-    This class handles both interaction data and item text data, converting text to embeddings
-    using any Hugging Face Transformers model.
-    """
-    
     def __init__(
         self,
         data_interaction_files: str,
         data_text_files: str,
-        tokenizer: Any,
-        config: Any,
-        text_encoder_model: str = "t5-small",
-        embedding_extraction_strategy: str = "mean_pooling",
-        max_seq_length: int = 512,
+        tokenizer: AbstractTokenizer,
+        config: dict,
+        mode: str = 'train',  # 'train', 'valid', or 'test'
         device: Optional[str] = None
     ) -> None:
-        """
-        Initialize the dataset with interaction data, text data, and a text encoder model.
-        
-        Args:
-            data_interaction_files: Path to the interaction data pickle file
-            data_text_files: Path to the item text data pickle file
-            tokenizer: Tokenizer for the main model
-            config: Configuration object
-            text_encoder_model: Name of the Hugging Face model to use for text encoding
-            embedding_extraction_strategy: Strategy for extracting embeddings from model output
-            max_seq_length: Maximum sequence length for tokenization
-            device: Device to run the model on (cuda/cpu)
-            
-        Returns:
-            None
-        """
         self.config = config
         self.data_interaction_files = data_interaction_files
         self.data_text_files = data_text_files
         self.tokenizer = tokenizer
-        self.text_encoder_model_name = text_encoder_model
-        self.embedding_strategy = embedding_extraction_strategy
-        self.max_seq_length = max_seq_length
+        self.mode = mode
+        self.device = device if device else torch.device('cpu')
         
-        # Set device
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        # 确保配置中有必要的参数
+        assert 'max_seq_len' in config, "config must contain 'max_seq_len'"
         
-        # Load text encoder model and tokenizer
-        self.text_tokenizer = AutoTokenizer.from_pretrained(self.text_encoder_model_name)
-        self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
-        self.text_model.to(self.device)
-        self.text_model.eval()
-
-        # Read user history sequences and item text information
+        # 设置填充方向，默认为右填充
+        self.padding_side = config.get('padding_side', 'right')
+        assert self.padding_side in ['left', 'right'], "padding_side must be either 'left' or 'right'"
+        
+        # 忽略标签索引（用于不需要计算损失的位置）
+        self.ignored_label = config.get('ignored_label', -100)
+        
+        # 加载数据
         self.item_reviews = self._load_item_reviews()
         self.user_seqs = self._load_user_seqs()
+        self.user_ids = list(self.user_seqs.keys())
+        
+        # 计算每个物品的token数量（假设所有物品相同）
+        self.tokens_per_item = self._get_tokens_per_item()
+        self.max_token_len = (self.tokens_per_item + 1) * self.config['max_seq_len']
+        
+        # 直接创建样本，而不是先预处理整个序列
+        self.samples = self._create_samples()
 
-        # Transform item text to item embeddings
-        self.item_embeddings = self._transform_semantic_ids()
-    
-    def set_embedding_extraction_strategy(self, strategy: str) -> None:
-        """
-        Set the strategy for extracting embeddings from the model output.
-        
-        Args:
-            strategy: Embedding extraction strategy. Options: 
-                     "mean_pooling", "cls_token", "max_pooling", "last_token"
-                     
-        Returns:
-            None
-            
-        Raises:
-            ValueError: If an invalid strategy is provided
-        """
-        valid_strategies = ["mean_pooling", "cls_token", "max_pooling", "last_token"]
-        if strategy not in valid_strategies:
-            raise ValueError(f"Invalid strategy. Choose from: {valid_strategies}")
-        self.embedding_strategy = strategy
-    
     def _load_item_reviews(self) -> Dict[int, str]:
-        """
-        Load item reviews from the text data file.
-        
-        Args:
-            None
-            
-        Returns:
-            Dictionary mapping item IDs to their corresponding text reviews
-        """
         item_reviews = defaultdict(str)
         
         with open(self.data_text_files, 'rb') as f:
@@ -105,17 +58,8 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
             item_reviews[item_id] = item_context_info
         
         return item_reviews
-    
+
     def _load_user_seqs(self) -> Dict[int, List[int]]:
-        """
-        Load user interaction sequences from the interaction data file.
-        
-        Args:
-            None
-            
-        Returns:
-            Dictionary mapping user IDs to their interaction sequences (list of item IDs)
-        """
         user_seqs = defaultdict(list)
 
         with open(self.data_interaction_files, 'rb') as f:
@@ -128,213 +72,163 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
 
         return user_seqs
     
-    def _extract_embeddings(
-        self, 
-        model_outputs: Any, 
-        attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Extract embeddings from model outputs based on the selected strategy.
+    def _get_tokens_per_item(self) -> int:
+        """获取每个物品的token数量（假设所有物品相同）"""
+        if not self.tokenizer.item2tokens:
+            return 1  # 默认值
         
-        Args:
-            model_outputs: Output from the text encoder model
-            attention_mask: Attention mask indicating which tokens are padding
-            
-        Returns:
-            Tensor containing the extracted embeddings
-            
-        Raises:
-            ValueError: If an unknown embedding strategy is specified
-        """
-        last_hidden_state = model_outputs.last_hidden_state
-        
-        if self.embedding_strategy == "mean_pooling":
-            # Mean pooling with attention mask
-            input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-            sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
-            sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-            return sum_embeddings / sum_mask
-        
-        elif self.embedding_strategy == "cls_token":
-            # Use the [CLS] token (works for BERT-like models)
-            return last_hidden_state[:, 0, :]
-        
-        elif self.embedding_strategy == "max_pooling":
-            # Max pooling
-            input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-            # Set padding tokens to large negative value so they don't affect max
-            last_hidden_state[input_mask_expanded == 0] = -1e9
-            return torch.max(last_hidden_state, 1)[0]
-        
-        elif self.embedding_strategy == "last_token":
-            # Use the last token (before padding)
-            sequence_lengths = torch.sum(attention_mask, dim=1) - 1
-            batch_size = last_hidden_state.shape[0]
-            return last_hidden_state[torch.arange(batch_size), sequence_lengths]
-        
+        # 获取第一个物品的token数量
+        first_item = next(iter(self.tokenizer.item2tokens.keys()))
+        return len(self.tokenizer.item2tokens[first_item])
+
+    def _pad_sequence(self, sequence: List[int], max_length: int) -> Tuple[List[int], List[int]]:
+        """根据配置的填充方向填充序列并返回attention mask"""
+        if len(sequence) < max_length:
+            padding_length = max_length - len(sequence)
+            if self.padding_side == 'left':
+                # 左填充：在序列左侧添加padding
+                padded_seq = [self.tokenizer.pad_token] * padding_length + sequence
+                attention_mask = [0] * padding_length + [1] * len(sequence)
+            else:  # right padding
+                # 右填充：在序列右侧添加padding
+                padded_seq = sequence + [self.tokenizer.pad_token] * padding_length
+                attention_mask = [1] * len(sequence) + [0] * padding_length
         else:
-            raise ValueError(f"Unknown embedding strategy: {self.embedding_strategy}")
-    
-    def _transform_semantic_ids(self) -> Dict[int, np.ndarray]:
-        """
-        Transform item texts to embeddings using the specified model.
+            # 截断序列
+            if self.padding_side == 'left':
+                # 左填充时，保留序列的右侧部分
+                padded_seq = sequence[-max_length:]
+                attention_mask = [1] * max_length
+            else:  # right padding
+                # 右填充时，保留序列的左侧部分
+                padded_seq = sequence[:max_length]
+                attention_mask = [1] * max_length
         
-        Args:
-            None
-            
-        Returns:
-            Dictionary mapping item IDs to their corresponding embeddings
-        """
-        item_embeddings = {}
+        return padded_seq, attention_mask
+
+    def _item_seq_to_token_seq(self, item_seq: List[int]) -> List[int]:
+        """将物品序列转换为token序列"""
+        token_seq = [token for item in item_seq for token in self.tokenizer.item2tokens[item]]
+        return token_seq
+
+    def _tokenize_first_n_items(self, item_seq: List[int]) -> Tuple[List[int], List[int], List[int], int]:
+        """处理前n个物品，计算所有位置的损失"""
+        token_seq = self._item_seq_to_token_seq(item_seq)
         
-        # Batch processing for efficiency
-        batch_size = 32  # Adjust based on GPU memory
-        item_ids = list(self.item_reviews.keys())
-        item_texts = [self.item_reviews[item_id] for item_id in item_ids]
+        # 输入序列是除了最后一个token的所有token
+        input_seq = token_seq[:-1]
+        seq_lens = len(input_seq)
         
-        for i in range(0, len(item_texts), batch_size):
-            batch_texts = item_texts[i:i+batch_size]
-            batch_ids = item_ids[i:i+batch_size]
-            
-            # Tokenize the batch
-            inputs = self.text_tokenizer(
-                batch_texts, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True, 
-                max_length=self.max_seq_length
-            ).to(self.device)
-            
-            # Get model outputs
-            with torch.no_grad():
-                outputs = self.text_model(**inputs)
-            
-            # Extract embeddings based on the selected strategy
-            embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
-            
-            # Store embeddings
-            for j, item_id in enumerate(batch_ids):
-                item_embeddings[item_id] = embeddings[j].cpu().numpy()
+        # 标签序列是除了第一个token的所有token（即输入序列的下一个token）
+        label_seq = token_seq[1:]
         
-        return item_embeddings
-    
-    def __len__(self) -> int:
-        """
-        Get the number of users in the dataset.
+        # 填充序列
+        padded_input, attention_mask = self._pad_sequence(input_seq, self.max_token_len)
+        padded_labels, _ = self._pad_sequence(label_seq, self.max_token_len)
         
-        Args:
-            None
-            
-        Returns:
-            Number of users in the dataset
-        """
-        return len(self.item_reviews)
-    
-    def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor]]:
-        """
-        Get a single sample from the dataset.
+        return padded_input, attention_mask, padded_labels, seq_lens
+
+    def _tokenize_later_items(self, item_seq: List[int], pad_labels: bool = True) -> Tuple[List[int], List[int], List[int], int]:
+        """处理后续物品，只计算最后一个位置的损失"""
+        token_seq = self._item_seq_to_token_seq(item_seq)
         
-        Args:
-            index: Index of the sample to retrieve
-            
-        Returns:
-            Dictionary containing:
-                - user_id: ID of the user
-                - sequence_embeddings: Tensor of item embeddings for the user's sequence
-                - sequence_length: Length of the sequence
-        """
-        # Get user ID and sequence
-        user_ids = list(self.user_seqs.keys())
-        user_id = user_ids[index]
-        item_seq = self.user_seqs[user_id]
+        # 输入序列是除了最后一个物品的所有token
+        input_seq = token_seq[:-self.tokens_per_item]
+        seq_lens = len(input_seq)
         
-        # Convert each item ID in the sequence to its embedding
-        seq_embeddings = []
-        for item_id in item_seq:
-            if item_id in self.item_embeddings:
-                seq_embeddings.append(self.item_embeddings[item_id])
+        # 标签序列：只有最后一个物品对应的位置有真实标签，其他位置使用忽略标签
+        label_seq = [self.ignored_label] * seq_lens
+        
+        # 添加最后一个物品的token作为标签
+        last_item_tokens = token_seq[-self.tokens_per_item:]
+        label_seq.extend(last_item_tokens)
+        
+        # 填充输入序列
+        padded_input, attention_mask = self._pad_sequence(input_seq, self.max_token_len)
+        
+        # 填充标签序列（如果需要）
+        if pad_labels:
+            padded_labels, _ = self._pad_sequence(label_seq, self.max_token_len)
+        else:
+            padded_labels = label_seq  # 不填充，直接使用
+        
+        return padded_input, attention_mask, padded_labels, seq_lens
+
+    def _create_samples(self) -> List[Dict[str, Any]]:
+        """创建样本"""
+        samples = []
+        max_item_seq_len = self.config['max_seq_len']
+        
+        for user_id, item_seq in self.user_seqs.items():
+            if self.mode == 'train':
+                n_return_examples = max(len(item_seq) - max_item_seq_len, 1)
+                
+                # 处理第一个窗口（前n个物品）
+                if len(item_seq) <= max_item_seq_len + 1:
+                    # 如果序列长度不超过最大长度+1，直接处理所有物品
+                    input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(
+                        item_seq[:min(len(item_seq), max_item_seq_len + 1)]
+                    )
+                    samples.append({
+                        'user_id': user_id,
+                        'input_ids': torch.tensor(input_ids, dtype=torch.long),
+                        'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                        'labels': torch.tensor(labels, dtype=torch.long),
+                        'seq_lens': seq_lens
+                    })
+                else:
+                    # 处理第一个窗口
+                    first_window = item_seq[:max_item_seq_len + 1]
+                    input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(first_window)
+                    samples.append({
+                        'user_id': user_id,
+                        'input_ids': torch.tensor(input_ids, dtype=torch.long),
+                        'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                        'labels': torch.tensor(labels, dtype=torch.long),
+                        'seq_lens': seq_lens
+                    })
+                    
+                    # 处理后续窗口
+                    for i in range(1, n_return_examples):
+                        cur_item_seq = item_seq[i:i + max_item_seq_len + 1]
+                        input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(cur_item_seq)
+                        samples.append({
+                            'user_id': user_id,
+                            'input_ids': torch.tensor(input_ids, dtype=torch.long),
+                            'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                            'labels': torch.tensor(labels, dtype=torch.long),
+                            'seq_lens': seq_lens
+                        })
             else:
-                # Handle unknown items - use zero vector or special token
-                embedding_size = self.text_model.config.hidden_size
-                seq_embeddings.append(np.zeros(embedding_size))
+                # 验证或测试模式
+                if self.mode == 'test':
+                    # 测试集：使用最后max_seq_len+1个物品，预测最后一个物品
+                    if len(item_seq) < max_item_seq_len + 1:
+                        window_items = item_seq
+                    else:
+                        window_items = item_seq[-(max_item_seq_len + 1):]
+                else:  # valid
+                    # 验证集：使用倒数第二个到倒数第max_seq_len+2个物品，预测倒数第二个物品
+                    if len(item_seq) < max_item_seq_len + 2:
+                        window_items = item_seq[:len(item_seq)-1]
+                    else:
+                        window_items = item_seq[-(max_item_seq_len + 2):-1]
+                
+                input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
+                    window_items, pad_labels=False
+                )
+                samples.append({
+                    'user_id': user_id,
+                    'input_ids': torch.tensor(input_ids, dtype=torch.long),
+                    'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                    'labels': torch.tensor(labels[-self.tokens_per_item:], dtype=torch.long),  # 只保留最后一个物品的标签
+                    'seq_lens': seq_lens
+                })
         
-        # Convert to tensor
-        seq_embeddings = torch.tensor(np.array(seq_embeddings), dtype=torch.float32)
-        
-        return {
-            "user_id": user_id,
-            "sequence_embeddings": seq_embeddings,
-            "sequence_length": len(item_seq)
-        }
+        return samples
 
+    def __len__(self) -> int:
+        return len(self.samples)
 
-def collate_fn(batch: List[Dict[str, Union[int, torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-    """
-    Collate function for batching variable-length sequences.
-    
-    Args:
-        batch: List of samples from the dataset
-        
-    Returns:
-        Dictionary containing:
-            - padded_sequences: Padded sequence embeddings
-            - lengths: Original lengths of the sequences
-            - user_ids: User IDs for the batch
-    """
-    # Sort by sequence length (for pack_padded_sequence)
-    batch.sort(key=lambda x: x["sequence_length"], reverse=True)
-    
-    sequences = [item["sequence_embeddings"] for item in batch]
-    user_ids = [item["user_id"] for item in batch]
-    lengths = [item["sequence_length"] for item in batch]
-    
-    # Pad sequences
-    padded_sequences = torch.nn.utils.rnn.pad_sequence(sequences, batch_first=True)
-    
-    return {
-        "padded_sequences": padded_sequences,
-        "lengths": lengths,
-        "user_ids": user_ids
-    }
-
-
-# Example usage
-def create_dataloader(
-    data_interaction_files: str,
-    data_text_files: str,
-    tokenizer: Any,
-    config: Any,
-    batch_size: int = 32,
-    text_encoder_model: str = "t5-small",
-    embedding_strategy: str = "mean_pooling"
-) -> DataLoader:
-    """
-    Create a DataLoader for the Amazon Reviews dataset.
-    
-    Args:
-        data_interaction_files: Path to the interaction data pickle file
-        data_text_files: Path to the item text data pickle file
-        tokenizer: Tokenizer for the main model
-        config: Configuration object
-        batch_size: Batch size for the DataLoader
-        text_encoder_model: Name of the Hugging Face model to use for text encoding
-        embedding_strategy: Strategy for extracting embeddings from model output
-        
-    Returns:
-        DataLoader for the Amazon Reviews dataset
-    """
-    dataset = TokenizerAmazonReviews2014Dataset(
-        data_interaction_files=data_interaction_files,
-        data_text_files=data_text_files,
-        tokenizer=tokenizer,
-        config=config,
-        text_encoder_model=text_encoder_model,
-        embedding_extraction_strategy=embedding_strategy
-    )
-    
-    return DataLoader(
-        dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        collate_fn=collate_fn
-    )
+    def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor]]:
+        return self.samples[index]
