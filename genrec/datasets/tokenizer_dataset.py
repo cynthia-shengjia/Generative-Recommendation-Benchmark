@@ -244,7 +244,8 @@ class ItemEmbeddingDataset(Dataset):
         """
         if item_id in self.item_embeddings:
             return torch.tensor(self.item_embeddings[item_id], dtype=torch.float32)
-        return None
+        else:
+            raise KeyError(f"Item ID {item_id} not found in embeddings")
     
     def get_text_by_id(self, item_id: int) -> Optional[str]:
         """
@@ -256,7 +257,10 @@ class ItemEmbeddingDataset(Dataset):
         Returns:
             String containing the item's text, or None if not found
         """
-        return self.item_reviews.get(item_id, None)
+        if item_id in self.item_reviews:
+            return self.item_reviews.get(item_id, None)
+        else:
+            raise KeyError(f"Item ID {item_id} not found in item_reviews")
 
 
 def item_collate_fn(batch: List[Dict[str, Union[int, torch.Tensor, str]]]) -> Dict[str, torch.Tensor]:
