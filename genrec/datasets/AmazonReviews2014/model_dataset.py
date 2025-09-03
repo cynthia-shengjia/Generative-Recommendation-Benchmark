@@ -2,7 +2,7 @@ from torch.utils.data import Dataset
 from collections import defaultdict
 import pickle
 
-class AmazonReviews2014Dataset(Dataset):
+class ModelAmazonReviews2014Dataset(Dataset):
     """
     Load Generative Recommender Dataset
     """
@@ -18,9 +18,13 @@ class AmazonReviews2014Dataset(Dataset):
         self.data_text_files        = data_text_files
         self.tokenizer              = tokenizer
 
+        # Read user history sequences and item text infomations
         self.item_reviews: dict     = self._load_item_reviews()
         self.user_seqs: dict        = self._load_user_seqs()
-    
+
+        # 
+
+ 
     def _load_item_reviews(self):
         
         item_reviews = defaultdict(str)
@@ -34,7 +38,6 @@ class AmazonReviews2014Dataset(Dataset):
             item_reviews[item_id] = item_context_info
         
         return item_reviews
-
     
     def _load_user_seqs(self):
         user_seqs = defaultdict(list)
