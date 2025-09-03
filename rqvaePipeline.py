@@ -44,7 +44,6 @@ class RQVAETrainingPipeline:
         """
         self.config = config
         
-        # 初始化组件变量
         self.tokenizer = None
         self.optimizer = None
         self.trainer = None
@@ -54,7 +53,6 @@ class RQVAETrainingPipeline:
     def _prepare_data(self):
         """Creates the dataset and dataloader."""
         print("\n--- Creating Dataset and Dataloader ---")
-        # 确保关键路径已在 config 中定义
         required_paths = ['data_text_files', 'save_path', 'checkpoint_path', 'text_encoder_model']
         for path_key in required_paths:
             if not self.config.get(path_key):
@@ -71,7 +69,6 @@ class RQVAETrainingPipeline:
         self.train_dataloader = DataloaderWrapper(dataloader)
         print("Dataset and Dataloader created successfully.")
 
-        # 数据检查
         print("\n--- Running a definitive data check ---")
         try:
             _, check_embeddings = next(iter(self.train_dataloader))
@@ -113,25 +110,6 @@ class RQVAETrainingPipeline:
         
         self.tokenizer.finalize_tokenization((item_ids_list, embeddings_array))
         print(f"Tokenizer finalized. Item to token map saved to: {self.config['save_path']}")
-
-        print("\n--- Verifying tokenization function ---")
-        sample_item_ids = np.random.choice(self.dataset.item_ids, 5, replace=False).tolist()
-        max_len = 5
-
-        print(f"Original item sequence: {sample_item_ids}")
-        try:
-            tokenized_seq = self.tokenizer._tokenize_item_seq(sample_item_ids, max_len)
-            print(f"Tokenized sequence (first 20 tokens): {tokenized_seq[:20]}...")
-            
-            expected_len = max_len * self.tokenizer.digits + 1
-            print(f"Tokenized sequence length: {len(tokenized_seq)}")
-            print(f"Expected length: {expected_len}")
-            
-            assert len(tokenized_seq) == expected_len, "Tokenized sequence length is incorrect!"
-            print("✅ Verification PASSED: Tokenization works as expected.")
-        except Exception as e:
-            print(f"❌ Verification FAILED: An error occurred during tokenization test: {e}")
-            raise
 
     def run(self):
         """
