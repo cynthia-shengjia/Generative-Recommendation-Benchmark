@@ -2,15 +2,12 @@ from rqvaePipeline import RQVAETrainingPipeline
 import torch
 import os
 def main():
-    """
-    主函数，通过调用 RQVAETrainingPipeline 来执行完整的训练和验证流程。
-    """
     output_dir = './output/tokenizer_model'
     os.makedirs(output_dir, exist_ok=True)
 
     config = {
-        'data_text_files': '/home/zhenxiangxv/GR-Benchmark/Generative-Recommendation-Benchmark/item2title.pkl',
-        'text_encoder_model': '/home/zhenxiangxv/model/sentence-t5-base',
+        'data_text_files': 'path2data',
+        'text_encoder_model': 'path2model',
         'save_path': os.path.join(output_dir, 'item2tokens.json'),
         'checkpoint_path': os.path.join(output_dir, 'tokenizer_checkpoint.pth'),
         
