@@ -228,7 +228,7 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
         Returns:
             Number of users in the dataset
         """
-        return len(self.user_seqs)
+        return len(self.item_reviews)
     
     def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor]]:
         """
