@@ -4,46 +4,50 @@ import torch.optim as optim
 from tqdm import tqdm
 from datetime import datetime
 from accelerate import Accelerator
-from transformers import T5Config, T5ForConditionalGeneration, get_linear_schedule_with_warmup
+from transformers get_linear_schedule_with_warmup
+from genrec.models.CustomT5.T5Model import CustomT5ForConditionalGeneration
+from genrec.models.CustomT5.T5Config import CustomT5Config
 import logging
 import re
 def create_custom_t5_model(
-    vocab_size: int,
-    d_kv: int,
-    d_ff: int,
-    num_layers: int,
-    num_decoder_layers: int,
-    num_heads: int,
-    dropout_rate: float,
-    tie_word_embeddings: bool
-) -> T5ForConditionalGeneration:
+    codebook_size: int,
+    d_kv: int = 64,         # 每个注意力头的维度
+    d_ff: int = 1024,       # 前馈网络维度
+    num_layers: int = 4,    # 编码器层数
+    num_decoder_layers: int = 4,  # 解码器层数
+    num_heads: int = 6,     # 注意力头数
+    dropout_rate: float = 0.1,  # dropout率
+    tie_word_embeddings: bool = True
+) -> CustomT5ForConditionalGeneration:
     """
-    根据给定的配置创建一个自定义的T5模型。
+    创建自定义T5模型，根据提供的配置参数
+    d_model 会自动计算为 d_kv * num_heads
     """
-    d_model = num_heads * d_kv
-    config = T5Config(
-        vocab_size=vocab_size,
-        d_model=d_model,
+    config = CustomT5Config(
+        codebook_size=codebook_size,
         d_kv=d_kv,
         d_ff=d_ff,
         num_layers=num_layers,
         num_decoder_layers=num_decoder_layers,
         num_heads=num_heads,
-        relative_attention_num_buckets=32,
         dropout_rate=dropout_rate,
-        tie_word_embeddings=tie_word_embeddings,
-        initializer_factor=1.0,
-        feed_forward_proj="relu",
-        is_encoder_decoder=True,
-        use_cache=True,
-        pad_token_id=0,
-        decoder_start_token_id=0,
+        tie_word_embeddings=tie_word_embeddings
     )
-    model = T5ForConditionalGeneration(config)
+    
+    # 计算 latent_dim = d_model = d_kv * num_heads
+    latent_dim = d_kv * num_heads
+    
+    model = CustomT5ForConditionalGeneration(
+        config=config,
+        codebook_size=codebook_size,
+        latent_dim=latent_dim,
+        tie_word_embeddings=tie_word_embeddings
+    )
+    
     return model
 
 def train_model(
-    model: T5ForConditionalGeneration,
+    model: CustomT5ForConditionalGeneration,
     train_dataloader: torch.utils.data.DataLoader,
     learning_rate: float,
     num_epochs: int,
@@ -53,7 +57,7 @@ def train_model(
     log_interval: int = 100,
     logger: logging.Logger = None,
     num_steps: int = None,
-) -> T5ForConditionalGeneration:
+) -> CustomT5ForConditionalGeneration:
     """
     使用Accelerate进行模型训练，并按Epoch保存和加载检查点。
     """
@@ -100,9 +104,11 @@ def train_model(
                 break
 
             outputs = model(
-                input_ids=batch['encoder_input_ids'],
-                attention_mask=batch['encoder_attention_mask'],
-                labels=batch['labels']
+                input_ids               = batch['encoder_input_ids'],
+                attention_mask          = batch['encoder_attention_mask'],
+                decoder_input_ids       = batch['decoder_input_ids']
+                decoder_attention_mask  = batch['decoder_attention_mask']
+                labels                  = batch['labels']
             )
             
             loss = outputs.loss
