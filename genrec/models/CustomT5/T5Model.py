@@ -11,7 +11,7 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
         self,
         config: T5Config,
         codebook_size: int,
-        latent_dim: int = 128,  # 根据配置设置为128
+        latent_dim: int = 384,  # 现在默认是 64 * 6 = 384
         tie_word_embeddings: bool = True
     ):
         # 初始化父类
@@ -46,6 +46,7 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
             
         # 初始化权重
         self.init_weights()
+
         
     def init_weights(self):
         """初始化模型权重"""

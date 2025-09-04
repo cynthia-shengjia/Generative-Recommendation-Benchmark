@@ -3,26 +3,22 @@ from torch.utils.data import DataLoader
 from transformers import get_scheduler
 import math
 
-
 def create_custom_t5_model(
     codebook_size: int,
-    latent_dim: int = 128,  # 根据配置设置为128
-    d_model: int = 128,     # 根据配置设置为128
-    d_kv: int = 64,         # 根据配置设置为64
-    d_ff: int = 1024,       # 根据配置设置为1024
-    num_layers: int = 4,    # 根据配置设置为4
-    num_decoder_layers: int = 4,  # 根据配置设置为4
-    num_heads: int = 6,     # 根据配置设置为6
-    dropout_rate: float = 0.1,  # 根据配置设置为0.1
+    d_kv: int = 64,         # 每个注意力头的维度
+    d_ff: int = 1024,       # 前馈网络维度
+    num_layers: int = 4,    # 编码器层数
+    num_decoder_layers: int = 4,  # 解码器层数
+    num_heads: int = 6,     # 注意力头数
+    dropout_rate: float = 0.1,  # dropout率
     tie_word_embeddings: bool = True
 ) -> CustomT5ForConditionalGeneration:
     """
     创建自定义T5模型，根据提供的配置参数
+    d_model 会自动计算为 d_kv * num_heads
     """
     config = CustomT5Config(
         codebook_size=codebook_size,
-        latent_dim=latent_dim,
-        d_model=d_model,
         d_kv=d_kv,
         d_ff=d_ff,
         num_layers=num_layers,
@@ -31,6 +27,9 @@ def create_custom_t5_model(
         dropout_rate=dropout_rate,
         tie_word_embeddings=tie_word_embeddings
     )
+    
+    # 计算 latent_dim = d_model = d_kv * num_heads
+    latent_dim = d_kv * num_heads
     
     model = CustomT5ForConditionalGeneration(
         config=config,
@@ -164,16 +163,15 @@ dataset_name = "Beauty"  # 或 "Sports and Outdoors" 或 "Toys and Games"
 # 创建模型
 model = create_custom_t5_model(
     codebook_size=codebook_size,
-    latent_dim=128,    # 根据配置
-    d_model=128,       # 根据配置
-    d_kv=64,           # 根据配置
-    d_ff=1024,         # 根据配置
-    num_layers=4,      # 根据配置
-    num_decoder_layers=4,  # 根据配置
-    num_heads=6,       # 根据配置
-    dropout_rate=0.1,  # 根据配置
+    d_kv=64,           # 每个注意力头的维度
+    d_ff=1024,         # 前馈网络维度
+    num_layers=4,      # 编码器层数
+    num_decoder_layers=4,  # 解码器层数
+    num_heads=6,       # 注意力头数
+    dropout_rate=0.1,  # dropout率
     tie_word_embeddings=True
 )
+
 
 # 打印模型参数数量
 total_params = sum(p.numel() for p in model.parameters())
