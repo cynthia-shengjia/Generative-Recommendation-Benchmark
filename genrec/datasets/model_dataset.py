@@ -7,7 +7,7 @@ import numpy as np
 from typing import Callable, Optional, Dict, List, Any, Tuple, Union
 from genrec.tokenizers.GRTokenizer import AbstractTokenizer
 
-class TokenizerAmazonReviews2014Dataset(Dataset):
+class SeqModelTrainingDataset(Dataset):
     def __init__(
         self,
         data_interaction_files: str,

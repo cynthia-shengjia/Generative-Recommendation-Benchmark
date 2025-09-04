@@ -8,7 +8,7 @@ from accelerate import Accelerator
 import logging 
 from rqvaePipeline import RQVAETrainingPipeline
 from model_train import create_custom_t5_model, train_model
-from genrec.datasets.model_dataset import TokenizerAmazonReviews2014Dataset
+from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def setup_logging(log_dir: str):
@@ -166,7 +166,7 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
             logger.info(f"模型总参数数量: {total_params:,}")
             logger.info("创建数据集...")
 
-        dataset = TokenizerAmazonReviews2014Dataset(
+        dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
             tokenizer=tokenizer, config=model_config, mode='train'
