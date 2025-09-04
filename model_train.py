@@ -24,7 +24,7 @@ def create_custom_t5_model(
     d_model 会自动计算为 d_kv * num_heads
     """
     config = CustomT5Config(
-        codebook_size=vocab_size,
+        vocab_size=vocab_size,
         d_kv=d_kv,
         d_ff=d_ff,
         num_layers=num_layers,
@@ -39,7 +39,7 @@ def create_custom_t5_model(
     
     model = CustomT5ForConditionalGeneration(
         config=config,
-        codebook_size=vocab_size,
+        vocab_size=vocab_size,
         latent_dim=latent_dim,
         tie_word_embeddings=tie_word_embeddings
     )

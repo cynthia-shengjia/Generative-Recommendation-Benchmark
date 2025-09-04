@@ -10,7 +10,7 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
     def __init__(
         self,
         config: T5Config,
-        codebook_size: int,
+        vocab_size: int,
         latent_dim: int = 384,  # 现在默认是 64 * 6 = 384
         tie_word_embeddings: bool = True
     ):
@@ -18,11 +18,11 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
         super().__init__(config)
         
         # 保存配置参数
-        self.codebook_size = codebook_size
+        self.vocab_size = vocab_size
         self.latent_dim = latent_dim
         
-        # 创建嵌入层 - 大小应为 [codebook_size, latent_dim]
-        self.shared = nn.Embedding(codebook_size, latent_dim)
+        # 创建嵌入层 - 大小应为 [vocab_size, latent_dim]
+        self.shared = nn.Embedding(vocab_size, latent_dim)
         
         # 创建编码器和解码器
         encoder_config = copy.deepcopy(config)
@@ -37,8 +37,8 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
         decoder_config.num_layers = config.num_decoder_layers
         self.decoder = T5Stack(decoder_config, self.shared)
         
-        # 创建LM头 - 输出大小应为codebook_size
-        self.lm_head = nn.Linear(config.d_model, codebook_size, bias=False)
+        # 创建LM头 - 输出大小应为vocab_size
+        self.lm_head = nn.Linear(config.d_model, vocab_size, bias=False)
         
         # 是否绑定权重
         if tie_word_embeddings:
@@ -105,7 +105,7 @@ class CustomT5ForConditionalGeneration(T5PreTrainedModel):
         loss = None
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(logits.view(-1, self.codebook_size), labels.view(-1))
+            loss = loss_fct(logits.view(-1, self.vocab_size), labels.view(-1))
         
         if not return_dict:
             output = (logits,) + decoder_outputs[1:] + encoder_outputs

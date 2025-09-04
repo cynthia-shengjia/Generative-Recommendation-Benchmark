@@ -3,7 +3,7 @@ from transformers import T5Config
 class CustomT5Config(T5Config):
     def __init__(
         self,
-        codebook_size: int,
+        vocab_size: int,
         d_kv: int = 64,               # 每个注意力头的维度
         num_heads: int = 6,           # 注意力头数
         d_ff: int = 1024,             # 前馈网络维度
@@ -30,12 +30,12 @@ class CustomT5Config(T5Config):
         defaults.update(kwargs)
         
         super().__init__(**defaults)
-        self.codebook_size = codebook_size
+        self.vocab_size = vocab_size
         # latent_dim 现在等于 d_model
         self.latent_dim = d_model
         
     def to_dict(self):
         output = super().to_dict()
-        output["codebook_size"] = self.codebook_size
+        output["vocab_size"] = self.vocab_size
         output["latent_dim"] = self.latent_dim
         return output
