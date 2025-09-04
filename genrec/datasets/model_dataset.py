@@ -41,7 +41,8 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
         
         # 计算每个物品的token数量（假设所有物品相同）
         self.tokens_per_item = self._get_tokens_per_item()
-        self.max_token_len = (self.tokens_per_item + 1) * self.config['max_seq_len']
+        self.max_token_len = (self.tokens_per_item + 1) * self.config['max_seq_len'] + 1
+        # [user_id]: 1, senmatic_tokens:  (self.tokens_per_item + 1) * self.config['max_seq_len'] 
         
         # 直接创建样本，而不是先预处理整个序列
         self.samples = self._create_samples()
@@ -106,16 +107,26 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
         
         return padded_seq, attention_mask
 
-    def _item_seq_to_token_seq(self, item_seq: List[int]) -> List[int]:
-        """将物品序列转换为token序列"""
+
+    def _decoder_item_seq_to_token_seq(self, item_seq: List[int]) -> List[int]:
+        """
+            [将物品序列转换为token序列]
+        """
         token_seq = [token for item in item_seq for token in self.tokenizer.item2tokens[item]]
         return token_seq
 
-    def _prepare_t5_inputs(self, item_seq: List[int], is_target: bool = False) -> Tuple[List[int], List[int], List[int], int]:
+    def _encoder_item_seq_to_token_seq(self, user_id, item_seq: List[int]) -> List[int]:
+        """
+            [user_id 2 token] + [将物品序列转换为token序列]
+        """
+        token_seq = [self.tokenizer.get_user_token(user_id)] + [token for item in item_seq for token in self.tokenizer.item2tokens[item]]
+        return token_seq
+
+    def _prepare_t5_inputs(self, user_id, item_seq: List[int], is_target: bool = False) -> Tuple[List[int], List[int], List[int], int]:
         """为T5模型准备输入和标签，遵循teacher forcing模式"""
-        token_seq = self._item_seq_to_token_seq(item_seq)
         
         if is_target:
+            token_seq = self._decoder_item_seq_to_token_seq(item_seq)
             # 对于目标序列，我们需要添加EOS token
             token_seq = token_seq + [self.tokenizer.eos_token]
             
@@ -135,6 +146,7 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
             
             return padded_decoder_input, decoder_attention_mask, padded_labels, len(decoder_input_ids)
         else:
+            token_seq = self._encoder_item_seq_to_token_seq(user_id,item_seq)
             # 对于编码器输入，直接使用序列
             encoder_input_ids = token_seq
             
@@ -158,11 +170,13 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                 if len(item_seq) <= max_item_seq_len + 1:
                     # 编码器输入：前n-1个物品
                     encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                        user_id,
                         item_seq[:-1]
                     )
                     
                     # 解码器输入和标签：最后一个物品
                     decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                        user_id
                         [item_seq[-1]], is_target=True
                     )
                     
@@ -179,11 +193,13 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                     # 处理第一个窗口
                     # 编码器输入：前max_seq_len个物品
                     encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                        user_id,
                         item_seq[:max_item_seq_len]
                     )
                     
                     # 解码器输入和标签：第max_seq_len+1个物品
                     decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                        user_id,
                         [item_seq[max_item_seq_len]], is_target=True
                     )
                     
@@ -201,11 +217,13 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                     for i in range(1, n_return_examples):
                         # 编码器输入：从i到i+max_seq_len-1的物品
                         encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                            user_id,
                             item_seq[i:i+max_item_seq_len]
                         )
                         
                         # 解码器输入和标签：第i+max_seq_len个物品
                         decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                            user_id,
                             [item_seq[i+max_item_seq_len]], is_target=True
                         )
                         
@@ -238,10 +256,11 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                         target_item = [item_seq[-2]]  # 倒数第二个物品
                 
                 # 准备编码器输入
-                encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(encoder_items)
+                encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(user_id,encoder_items)
                 
                 # 准备解码器输入和标签
                 decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                    user_id,
                     target_item, is_target=True
                 )
                 
