@@ -18,6 +18,7 @@ class CustomT5Config(T5Config):
         # 设置默认参数以匹配配置
         defaults = {
             'd_model': d_model,           # 模型维度 = d_kv * num_heads
+            'vocab_size': vocab_size,
             'd_kv': d_kv,                 # 每个注意力头的维度
             'd_ff': d_ff,                 # 前馈网络维度
             'num_layers': num_layers,     # 编码器层数
