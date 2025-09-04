@@ -52,10 +52,10 @@ def setup_output_directories(base_output_dir: str = "./output"):
 def get_rqvae_config(output_dirs: dict, device: torch.device, config_overrides: dict = None):
     """获取RQ-VAE tokenizer的配置"""
     config = {
-        'data_text_files': './data/Baeuty/item2title.pkl',
-        'text_encoder_model': 'path2model',
+        'data_text_files': './data/Beauty/item2title.pkl',
+        'text_encoder_model': '/home/zhenxiangxv/model/sentence-t5-base',
         'tokenizer_path':os.path.join(output_dirs['tokenizer'], 'tokenizer.pkl'),
-        'interaction_files': './data/Baeuty/user2item.pkl',
+        'interaction_files': './data/Beauty/user2item.pkl',
         'save_path': os.path.join(output_dirs['tokenizer'], 'item2tokens.json'),
         'checkpoint_path': os.path.join(output_dirs['tokenizer'], 'tokenizer_checkpoint.pth'),
         'sent_emb_dim': 768, 'n_codebooks': 3, 'codebook_size': 256,
@@ -72,8 +72,8 @@ def get_model_config(output_dirs: dict, dataset_name: str, device: torch.device,
     """获取生成模型的配置"""
     config = {
         'dataset_name': dataset_name,
-        'data_interaction_files': './data/user2item.pkl',
-        'data_text_files': './data/item2title.pkl',
+        'data_interaction_files': './data/Beauty/user2item.pkl',
+        'data_text_files': './data/Beauty/item2title.pkl',
         'max_seq_len': 20, 'padding_side': 'left', 'ignored_label': -100,
         'codebook_size': 256, 'd_kv': 64, 'd_ff': 1024, 'num_layers': 4,
         'num_decoder_layers': 4, 'num_heads': 6, 'dropout_rate': 0.1,

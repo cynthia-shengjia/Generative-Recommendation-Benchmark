@@ -174,9 +174,8 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                         item_seq[:-1]
                     )
                     
-                    # 解码器输入和标签：最后一个物品
                     decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
-                        user_id
+                        user_id,
                         [item_seq[-1]], is_target=True
                     )
                     

@@ -4,13 +4,13 @@ import torch.optim as optim
 from tqdm import tqdm
 from datetime import datetime
 from accelerate import Accelerator
-from transformers get_linear_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup
 from genrec.models.CustomT5.T5Model import CustomT5ForConditionalGeneration
 from genrec.models.CustomT5.T5Config import CustomT5Config
 import logging
 import re
 def create_custom_t5_model(
-    codebook_size: int,
+    vocab_size: int,
     d_kv: int = 64,         # 每个注意力头的维度
     d_ff: int = 1024,       # 前馈网络维度
     num_layers: int = 4,    # 编码器层数
@@ -24,7 +24,7 @@ def create_custom_t5_model(
     d_model 会自动计算为 d_kv * num_heads
     """
     config = CustomT5Config(
-        codebook_size=codebook_size,
+        codebook_size=vocab_size,
         d_kv=d_kv,
         d_ff=d_ff,
         num_layers=num_layers,
@@ -39,7 +39,7 @@ def create_custom_t5_model(
     
     model = CustomT5ForConditionalGeneration(
         config=config,
-        codebook_size=codebook_size,
+        codebook_size=vocab_size,
         latent_dim=latent_dim,
         tie_word_embeddings=tie_word_embeddings
     )
@@ -106,12 +106,12 @@ def train_model(
             outputs = model(
                 encoder_input_ids               = batch['encoder_input_ids'],
                 encoder_attention_mask          = batch['encoder_attention_mask'],
-                decoder_input_ids               = batch['decoder_input_ids']
-                decoder_attention_mask          = batch['decoder_attention_mask']
+                decoder_input_ids               = batch['decoder_input_ids'],
+                decoder_attention_mask          = batch['decoder_attention_mask'],
                 labels                          = batch['labels']
             )
             
-            loss = outputs.loss
+            loss = outputs['loss']
             accelerator.backward(loss)
             
             if accelerator.sync_gradients:
