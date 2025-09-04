@@ -5,14 +5,10 @@ import json
 import argparse
 from datetime import datetime
 from torch.utils.data import DataLoader
-from accelerate import Accelerator
 import logging 
-from rqvaePipeline import RQVAETrainingPipeline
 from model_train import create_custom_t5_model, train_model
-from genrec.datasets.model_dataset import SeqModelTrainingDataset
-from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 model_config = {
-        'dataset_name': dataset_name,
+        'dataset_name': "hello",
         'data_interaction_files': './data/Beauty/user2item.pkl',
         'data_text_files': './data/Beauty/item2title.pkl',
         'max_seq_len': 20, 'padding_side': 'left', 'ignored_label': -100,
@@ -20,8 +16,8 @@ model_config = {
         'num_decoder_layers': 4, 'num_heads': 6, 'dropout_rate': 0.1,
         'tie_word_embeddings': True, 'batch_size': 128, 'learning_rate': 0.001,
         'num_epochs': 2, 'num_steps': None,
-        'model_save_path': os.path.join(output_dirs['model'], f'{dataset_name}_final_model.pt'),
-        'checkpoint_dir': output_dirs['checkpoints'], 'device': device,
+        'model_save_path': "asd",
+        'checkpoint_dir': "asd", 'device': "cpu",
     }
 
 
