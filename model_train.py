@@ -104,11 +104,11 @@ def train_model(
                 break
 
             outputs = model(
-                input_ids               = batch['encoder_input_ids'],
-                attention_mask          = batch['encoder_attention_mask'],
-                decoder_input_ids       = batch['decoder_input_ids']
-                decoder_attention_mask  = batch['decoder_attention_mask']
-                labels                  = batch['labels']
+                encoder_input_ids               = batch['encoder_input_ids'],
+                encoder_attention_mask          = batch['encoder_attention_mask'],
+                decoder_input_ids               = batch['decoder_input_ids']
+                decoder_attention_mask          = batch['decoder_attention_mask']
+                labels                          = batch['labels']
             )
             
             loss = outputs.loss
