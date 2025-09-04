@@ -3,7 +3,7 @@ from transformers import T5Config
 class CustomT5Config(T5Config):
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: int = 1,
         d_kv: int = 64,               # 每个注意力头的维度
         num_heads: int = 6,           # 注意力头数
         d_ff: int = 1024,             # 前馈网络维度
@@ -25,6 +25,7 @@ class CustomT5Config(T5Config):
             'num_decoder_layers': num_decoder_layers,  # 解码器层数
             'num_heads': num_heads,       # 注意力头数
             'dropout_rate': dropout_rate, # dropout率
+            'bos_token_id': 0
         }
         
         # 更新默认值，但允许通过kwargs覆盖
