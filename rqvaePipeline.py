@@ -156,5 +156,7 @@ class RQVAETrainingPipeline:
         # self._initialize_codebooks()
         # self._train()
         self._finalize_and_verify()
+        tokenizer_save_path = self.config['tokenizer_path']
+        self.tokenizer.save(tokenizer_save_path)
         
         print("\n--- RQ-VAE Training Pipeline Finished Successfully ---")

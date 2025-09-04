@@ -11,6 +11,7 @@ from collections import defaultdict
 from .GRTokenizer import AbstractTokenizer
 import logging
 import hashlib
+import pickle
 class TigerTokenizer(AbstractTokenizer, nn.Module):
     """
     Workflow:
@@ -29,6 +30,7 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
         self.reserve_tokens = 100
         self.pad_token = 0    
         self.eos_token = 1
+        self.bos_token = self.pad_token
         self.ignored_label = -100
         self.n_codebooks = self.config['n_codebooks']
         # digits includes the codebooks plus an extra one for deduplication.
@@ -73,10 +75,24 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
     # @property
     # def max_token_seq_len(self) -> int:
     #     return self.config['max_item_seq_len'] * self.n_codebooks + 1
+    def save(self, filepath):
+        if hasattr(self, 'rq_vae'):
+            self.rq_vae.to('cpu')
+            
+        with open(filepath, 'wb') as f:
+            pickle.dump(self, f)
+        print(f"Tokenizer object saved to {filepath}")
 
+    @staticmethod
+    def load(filepath):
+
+        with open(filepath, 'rb') as f:
+            tokenizer = pickle.load(f)
+        print(f"Tokenizer object loaded from {filepath}")
+        return tokenizer
     @property
     def vocab_size(self) -> int:
-        return self.codebook_size * self.codebook_size + self.reserve_tokens + self.dulicate_num
+        return self.user_token_start_idx + self.num_user_tokens
 
     def log(self, message):
         logging.info(message)
