@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from transformers import T5Config, T5PreTrainedModel
 from transformers.models.t5.modeling_t5 import T5Stack
-from transformers.generation_utils import GenerationMixin
+from transformers.generation import GenerationMixin
 from typing import Optional, Tuple, Union, List, Dict, Any
 import copy
 import math
