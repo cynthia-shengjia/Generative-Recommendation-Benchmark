@@ -111,51 +111,42 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
         token_seq = [token for item in item_seq for token in self.tokenizer.item2tokens[item]]
         return token_seq
 
-    def _tokenize_first_n_items(self, item_seq: List[int]) -> Tuple[List[int], List[int], List[int], int]:
-        """处理前n个物品，计算所有位置的损失"""
+    def _prepare_t5_inputs(self, item_seq: List[int], is_target: bool = False) -> Tuple[List[int], List[int], List[int], int]:
+        """为T5模型准备输入和标签，遵循teacher forcing模式"""
         token_seq = self._item_seq_to_token_seq(item_seq)
         
-        # 输入序列是除了最后一个token的所有token
-        input_seq = token_seq[:-1]
-        seq_lens = len(input_seq)
-        
-        # 标签序列是除了第一个token的所有token（即输入序列的下一个token）
-        label_seq = token_seq[1:]
-        
-        # 填充序列
-        padded_input, attention_mask = self._pad_sequence(input_seq, self.max_token_len)
-        padded_labels, _ = self._pad_sequence(label_seq, self.max_token_len)
-        
-        return padded_input, attention_mask, padded_labels, seq_lens
-
-    def _tokenize_later_items(self, item_seq: List[int], pad_labels: bool = True) -> Tuple[List[int], List[int], List[int], int]:
-        """处理后续物品，只计算最后一个位置的损失"""
-        token_seq = self._item_seq_to_token_seq(item_seq)
-        
-        # 输入序列是除了最后一个物品的所有token
-        input_seq = token_seq[:-self.tokens_per_item]
-        seq_lens = len(input_seq)
-        
-        # 标签序列：只有最后一个物品对应的位置有真实标签，其他位置使用忽略标签
-        label_seq = [self.ignored_label] * seq_lens
-        
-        # 添加最后一个物品的token作为标签
-        last_item_tokens = token_seq[-self.tokens_per_item:]
-        label_seq.extend(last_item_tokens)
-        
-        # 填充输入序列
-        padded_input, attention_mask = self._pad_sequence(input_seq, self.max_token_len)
-        
-        # 填充标签序列（如果需要）
-        if pad_labels:
-            padded_labels, _ = self._pad_sequence(label_seq, self.max_token_len)
+        if is_target:
+            # 对于目标序列，我们需要添加EOS token
+            token_seq = token_seq + [self.tokenizer.eos_token]
+            
+            # 对于decoder输入，我们需要添加起始token并移除最后一个token
+            decoder_input_ids = [self.tokenizer.bos_token] + token_seq[:-1]
+            
+            # 标签就是完整的目标序列
+            labels = token_seq
+            
+            # 填充decoder输入
+            padded_decoder_input, decoder_attention_mask = self._pad_sequence(
+                decoder_input_ids, self.max_token_len
+            )
+            
+            # 填充标签
+            padded_labels, _ = self._pad_sequence(labels, self.max_token_len)
+            
+            return padded_decoder_input, decoder_attention_mask, padded_labels, len(decoder_input_ids)
         else:
-            padded_labels = label_seq  # 不填充，直接使用
-        
-        return padded_input, attention_mask, padded_labels, seq_lens
+            # 对于编码器输入，直接使用序列
+            encoder_input_ids = token_seq
+            
+            # 填充编码器输入
+            padded_encoder_input, encoder_attention_mask = self._pad_sequence(
+                encoder_input_ids, self.max_token_len
+            )
+            
+            return padded_encoder_input, encoder_attention_mask, None, len(encoder_input_ids)
 
     def _create_samples(self) -> List[Dict[str, Any]]:
-        """创建样本"""
+        """创建样本，适应T5的encoder-decoder架构"""
         samples = []
         max_item_seq_len = self.config['max_seq_len']
         
@@ -165,63 +156,102 @@ class TokenizerAmazonReviews2014Dataset(Dataset):
                 
                 # 处理第一个窗口（前n个物品）
                 if len(item_seq) <= max_item_seq_len + 1:
-                    # 如果序列长度不超过最大长度+1，直接处理所有物品
-                    input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(
-                        item_seq[:min(len(item_seq), max_item_seq_len + 1)]
+                    # 编码器输入：前n-1个物品
+                    encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                        item_seq[:-1]
                     )
+                    
+                    # 解码器输入和标签：最后一个物品
+                    decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                        [item_seq[-1]], is_target=True
+                    )
+                    
                     samples.append({
                         'user_id': user_id,
-                        'input_ids': torch.tensor(input_ids, dtype=torch.long),
-                        'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                        'encoder_input_ids': torch.tensor(encoder_input_ids, dtype=torch.long),
+                        'encoder_attention_mask': torch.tensor(encoder_attention_mask, dtype=torch.long),
+                        'decoder_input_ids': torch.tensor(decoder_input_ids, dtype=torch.long),
+                        'decoder_attention_mask': torch.tensor(decoder_attention_mask, dtype=torch.long),
                         'labels': torch.tensor(labels, dtype=torch.long),
                         'seq_lens': seq_lens
                     })
                 else:
                     # 处理第一个窗口
-                    first_window = item_seq[:max_item_seq_len + 1]
-                    input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(first_window)
+                    # 编码器输入：前max_seq_len个物品
+                    encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                        item_seq[:max_item_seq_len]
+                    )
+                    
+                    # 解码器输入和标签：第max_seq_len+1个物品
+                    decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                        [item_seq[max_item_seq_len]], is_target=True
+                    )
+                    
                     samples.append({
                         'user_id': user_id,
-                        'input_ids': torch.tensor(input_ids, dtype=torch.long),
-                        'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                        'encoder_input_ids': torch.tensor(encoder_input_ids, dtype=torch.long),
+                        'encoder_attention_mask': torch.tensor(encoder_attention_mask, dtype=torch.long),
+                        'decoder_input_ids': torch.tensor(decoder_input_ids, dtype=torch.long),
+                        'decoder_attention_mask': torch.tensor(decoder_attention_mask, dtype=torch.long),
                         'labels': torch.tensor(labels, dtype=torch.long),
                         'seq_lens': seq_lens
                     })
                     
                     # 处理后续窗口
                     for i in range(1, n_return_examples):
-                        cur_item_seq = item_seq[i:i + max_item_seq_len + 1]
-                        input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(cur_item_seq)
+                        # 编码器输入：从i到i+max_seq_len-1的物品
+                        encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(
+                            item_seq[i:i+max_item_seq_len]
+                        )
+                        
+                        # 解码器输入和标签：第i+max_seq_len个物品
+                        decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                            [item_seq[i+max_item_seq_len]], is_target=True
+                        )
+                        
                         samples.append({
                             'user_id': user_id,
-                            'input_ids': torch.tensor(input_ids, dtype=torch.long),
-                            'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
+                            'encoder_input_ids': torch.tensor(encoder_input_ids, dtype=torch.long),
+                            'encoder_attention_mask': torch.tensor(encoder_attention_mask, dtype=torch.long),
+                            'decoder_input_ids': torch.tensor(decoder_input_ids, dtype=torch.long),
+                            'decoder_attention_mask': torch.tensor(decoder_attention_mask, dtype=torch.long),
                             'labels': torch.tensor(labels, dtype=torch.long),
                             'seq_lens': seq_lens
                         })
             else:
                 # 验证或测试模式
                 if self.mode == 'test':
-                    # 测试集：使用最后max_seq_len+1个物品，预测最后一个物品
-                    if len(item_seq) < max_item_seq_len + 1:
-                        window_items = item_seq
+                    # 测试集：使用最后max_seq_len个物品作为编码器输入，预测最后一个物品
+                    if len(item_seq) <= max_item_seq_len:
+                        encoder_items = item_seq[:-1]  # 所有物品除了最后一个
+                        target_item = [item_seq[-1]]   # 最后一个物品
                     else:
-                        window_items = item_seq[-(max_item_seq_len + 1):]
+                        encoder_items = item_seq[-(max_item_seq_len+1):-1]  # 最后max_seq_len个物品（除了最后一个）
+                        target_item = [item_seq[-1]]  # 最后一个物品
                 else:  # valid
-                    # 验证集：使用倒数第二个到倒数第max_seq_len+2个物品，预测倒数第二个物品
-                    if len(item_seq) < max_item_seq_len + 2:
-                        window_items = item_seq[:len(item_seq)-1]
+                    # 验证集：使用倒数第二个到倒数第max_seq_len+1个物品作为编码器输入，预测倒数第二个物品
+                    if len(item_seq) <= max_item_seq_len + 1:
+                        encoder_items = item_seq[:-2]  # 所有物品除了最后两个
+                        target_item = [item_seq[-2]]   # 倒数第二个物品
                     else:
-                        window_items = item_seq[-(max_item_seq_len + 2):-1]
+                        encoder_items = item_seq[-(max_item_seq_len+2):-2]  # 从倒数第max_seq_len+2到倒数第三个物品
+                        target_item = [item_seq[-2]]  # 倒数第二个物品
                 
-                input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
-                    window_items, pad_labels=False
+                # 准备编码器输入
+                encoder_input_ids, encoder_attention_mask, _, seq_lens = self._prepare_t5_inputs(encoder_items)
+                
+                # 准备解码器输入和标签
+                decoder_input_ids, decoder_attention_mask, labels, _ = self._prepare_t5_inputs(
+                    target_item, is_target=True
                 )
+                
                 samples.append({
                     'user_id': user_id,
-                    'input_ids': torch.tensor(input_ids, dtype=torch.long),
-                    'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
-                    'labels': torch.tensor(labels[-self.tokens_per_item:], dtype=torch.long),  # 只保留最后一个物品的标签
+                    'encoder_input_ids': torch.tensor(encoder_input_ids, dtype=torch.long),
+                    'encoder_attention_mask': torch.tensor(encoder_attention_mask, dtype=torch.long),
+                    'decoder_input_ids': torch.tensor(decoder_input_ids, dtype=torch.long),
+                    'decoder_attention_mask': torch.tensor(decoder_attention_mask, dtype=torch.long),
+                    'labels': torch.tensor(labels, dtype=torch.long),
                     'seq_lens': seq_lens
                 })
         
