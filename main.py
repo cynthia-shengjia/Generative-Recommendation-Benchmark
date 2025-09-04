@@ -6,8 +6,9 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     config = {
-        'data_text_files': 'path2data',
+        'data_text_files': './item2title.pkl',
         'text_encoder_model': 'path2model',
+        'interaction_files': './user2item.pkl',
         'save_path': os.path.join(output_dir, 'item2tokens.json'),
         'checkpoint_path': os.path.join(output_dir, 'tokenizer_checkpoint.pth'),
         
@@ -21,7 +22,7 @@ def main():
         'loss_type': 'mse',
         'quant_loss_weight': 1.0,
         'commitment_beta': 0.25,
-        'rq_kmeans_init': True,
+        'rq_kmeans_init': False,
         'kmeans_iters': 10,
         'learning_rate': 1e-3,
         'epochs': 10,

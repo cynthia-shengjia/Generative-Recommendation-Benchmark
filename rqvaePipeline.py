@@ -53,7 +53,7 @@ class RQVAETrainingPipeline:
     def _prepare_data(self):
         """Creates the dataset and dataloader."""
         print("\n--- Creating Dataset and Dataloader ---")
-        required_paths = ['data_text_files', 'save_path', 'checkpoint_path', 'text_encoder_model']
+        required_paths = ['data_text_files', 'interaction_files','save_path', 'checkpoint_path', 'text_encoder_model']
         for path_key in required_paths:
             if not self.config.get(path_key):
                 raise ValueError(f"Configuration error: '{path_key}' must be specified in the config.")
@@ -105,10 +105,16 @@ class RQVAETrainingPipeline:
     def _finalize_and_verify(self):
         """Finalizes the Tokenizer and verifies its functionality."""
         print("\n--- Finalizing and Testing Tokenizer ---")
+        user2item_path = self.config['interaction_files']
+        with open(user2item_path, 'rb') as f:
+            user2item_data = pickle.load(f)
+        user_id_column = user2item_data['UserID']
+        all_user_ids = user_id_column.tolist()
+        print(f"Extracted {len(all_user_ids)} unique user IDs.")
         item_ids_list = self.dataset.item_ids
         embeddings_array = np.array([self.dataset.item_embeddings[id] for id in item_ids_list])
-        
-        self.tokenizer.finalize_tokenization((item_ids_list, embeddings_array))
+
+        self.tokenizer.finalize_tokenization((item_ids_list, embeddings_array), all_user_ids)
         print(f"Tokenizer finalized. Item to token map saved to: {self.config['save_path']}")
 
     def run(self):
@@ -120,8 +126,35 @@ class RQVAETrainingPipeline:
         
         self._prepare_data()
         self._initialize_components()
-        self._initialize_codebooks()
-        self._train()
+        checkpoint_path = self.config.get('checkpoint_path')
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            print(f"\n--- Checkpoint found at '{checkpoint_path}'. ---")
+            print("--- Loading model from checkpoint and skipping training. ---")
+            try:
+                device = self.config.get('device', 'cpu')
+                original_state_dict = torch.load(checkpoint_path, map_location=device)
+                new_state_dict = {}
+                prefix = 'rq_vae.'
+                for key, value in original_state_dict.items():
+                    if key.startswith(prefix):
+                        new_key = key[len(prefix):]
+                        new_state_dict[new_key] = value
+                    else:
+                        new_state_dict[key] = value
+                self.tokenizer.rq_vae.load_state_dict(new_state_dict)
+                self.tokenizer.rq_vae.to(device)
+                print("--- Model loaded successfully. ---")
+            except Exception as e:
+                print(f"--- Error loading checkpoint: {e} ---")
+                print("--- Proceeding with full training pipeline instead. ---")
+                self._initialize_codebooks()
+                self._train()
+        else:
+            print("\n--- No checkpoint found. Proceeding with full training. ---")
+            self._initialize_codebooks()
+            self._train()
+        # self._initialize_codebooks()
+        # self._train()
         self._finalize_and_verify()
         
         print("\n--- RQ-VAE Training Pipeline Finished Successfully ---")
