@@ -27,6 +27,7 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
 
         self.item2tokens = {} 
         self.user2tokens = {} 
+        self.tokens2item = {}
         self.reserve_tokens = 100
         self.pad_token = 0    
         self.eos_token = 1
@@ -53,6 +54,7 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
         )
         self.save_path = self.config['save_path']
         self.user_save_path = self.config['save_path'].replace('.json', '_users.json')
+        self.tokens2item_save_path = self.config['save_path'].replace('.json', '_tokens2item.json')
     def forward(self, embeddings: torch.Tensor):
         reconstructed_embeddings, quant_loss, indices, _ = self.rq_vae(embeddings)
         return reconstructed_embeddings, indices, quant_loss
@@ -136,8 +138,12 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
             with open(self.save_path, 'r', encoding='utf-8') as f:
                 loaded_item_data = json.load(f)
                 self.item2tokens = {int(k): v for k, v in loaded_item_data.items()}
-
-                self.log(f'[TOKENIZER] Loading from {self.user_save_path}')
+            if os.path.exists(self.tokens2item_save_path):
+                self.log(f'[TOKENIZER] Loading from {self.tokens2item_save_path}')
+                with open(self.tokens2item_save_path, 'r', encoding='utf-8') as f:
+                    loaded_tokens_data = json.load(f)
+                    self.tokens2item = {tuple(map(int, k.strip('()').split(','))): v 
+                                        for k, v in loaded_tokens_data.items()}
             with open(self.user_save_path, 'r', encoding='utf-8') as f:
                 loaded_user_data = json.load(f)
                 self.user2tokens = {int(k): v for k, v in loaded_user_data.items()}
@@ -163,7 +169,7 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
         
 
         self.item2tokens = self._sem_ids_to_tokens(adjusted_item2sem_ids)
-        
+        self.tokens2item = {v: k for k, v in self.item2tokens.items()}
         self.log(f'[TOKENIZER] Processing complete. Mapped {len(self.item2tokens)} items.')
         if user_ids:
             unique_user_ids = list(set(user_ids))
@@ -173,6 +179,9 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
             self.log(f'[TOKENIZER] Processing complete. Mapped {len(self.user2tokens)} users.')
         with open(self.save_path, 'w', encoding='utf-8') as f:
             json.dump(self.item2tokens, f, ensure_ascii=False, indent=4)
+        with open(self.tokens2item_save_path, 'w', encoding='utf-8') as f:
+            str_keys_tokens2item = {str(k): v for k, v in self.tokens2item.items()}
+            json.dump(str_keys_tokens2item, f, ensure_ascii=False, indent=4)
         with open(self.user_save_path, 'w', encoding='utf-8') as f:
             json.dump(self.user2tokens, f, ensure_ascii=False, indent=4)
     def _sem_ids_to_tokens(self, item2sem_ids: dict) -> dict:
@@ -202,6 +211,10 @@ class TigerTokenizer(AbstractTokenizer, nn.Module):
             token_seq = [user_token] + token_seq
         token_seq.append(self.eos_token)
         return token_seq
-    
+    def tokens_to_item(self, tokens: tuple) -> int:
+        """Converts a tuple of tokens back to its original item ID."""
+        if not self.tokens2item:
+            raise RuntimeError("Tokenizer has not been finalized. Please run `finalize_tokenization`.")
+        return self.tokens2item.get(tokens)
     def get_user_token(self, user_id: str) -> int:
         return self.user2tokens[user_id]

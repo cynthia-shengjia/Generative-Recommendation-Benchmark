@@ -6,9 +6,57 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 import logging 
 from model_train import create_custom_t5_model, train_model
+from generate_trie import Trie, prefix_allowed_tokens_fn
+import ast
 
 # 假设 model_train 模块中有 create_custom_t5_model 函数
 # from model_train import create_custom_t5_model, train_model
+
+# 读取JSON文件
+def load_json_file(file_path):
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    return data
+
+# 处理JSON数据，在每个序列前添加0
+def process_json_data(json_data):
+    processed_items = []
+    for key, sequence in json_data.items():
+        # 在每个序列前添加0
+        processed_sequence = [0] + sequence
+        processed_items.append(processed_sequence)
+    return processed_items
+
+# 读取JSON文件并创建映射字典
+def create_token_to_item_mapping(json_file_path):
+    with open(json_file_path, 'r') as f:
+        data = json.load(f)
+    
+    token_to_item_map = {}
+    
+    for key, value in data.items():
+        try:
+            tokens_tuple = ast.literal_eval(key)
+            tokens_list = list(tokens_tuple)
+        except:
+            cleaned_key = key.strip('()').replace(' ', '')
+            tokens_list = [int(x) for x in cleaned_key.split(',') if x]
+        
+        # 创建映射
+        token_to_item_map[tuple(tokens_list)] = value
+
+    return token_to_item_map
+
+# 构建Trie树
+item2tokens_json_file_path = "/home/lz/code/Generative-Recommendation-Benchmark/output/tokenizer_model/item2tokens.json"
+json_data = load_json_file(item2tokens_json_file_path)
+test_items = process_json_data(json_data)
+candidate_trie = Trie(test_items)
+prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
+
+# 创建tokens2item字典
+tokens2item_json_file_path = "/home/lz/code/Generative-Recommendation-Benchmark/output/tokenizer_model/item2tokens_tokens2item.json"
+tokens_to_item_map = create_token_to_item_mapping(tokens2item_json_file_path)
 
 model_config = {
     'dataset_name': "hello",
@@ -57,12 +105,12 @@ outputs = model.generate(
     decoder_start_token_id=0,
     output_scores=True,  # 获取分数
     return_dict_in_generate=True,  # 返回字典格式,
+    prefix_allowed_tokens_fn=prefix_allowed_fn, # 添加Trie约束
 )
 
 # 获取生成的序列和分数
 generated_ids = outputs.sequences
 sequences_scores = outputs.sequences_scores  # 对数概率
-
 
 
 # 将分数转换为概率
@@ -77,6 +125,21 @@ print(generated_ids_reshaped)
 print("\n每个序列的概率:")
 print(probabilities_reshaped)
 
+# 将tokens转化为item_ID
+def tokens_to_item_id(tokens_sequence, tokens_to_item_map):
+    # 如果是张量，转换为列表
+    if torch.is_tensor(tokens_sequence):
+        tokens_list = tokens_sequence.tolist()
+    else:
+        tokens_list = tokens_sequence
+    
+    # 转换为tuple作为字典的key
+    tokens_tuple = tuple(tokens_list)
+    
+    # 查找对应的item ID
+    return tokens_to_item_map.get(tokens_tuple, None)
+
+
 # 对每个用户的生成序列按概率排序
 sorted_results = []
 for i in range(batch_size):
@@ -89,12 +152,46 @@ for i in range(batch_size):
     sorted_sequences = user_sequences[sorted_indices]
     sorted_probs = user_probs[sorted_indices]
     
+    # 将tokens转换为item ID
+    item_ids = []
+    for seq in sorted_sequences:
+        item_id = tokens_to_item_id(seq, tokens_to_item_map)
+        item_ids.append(item_id)
+
     # 添加到结果列表
     sorted_results.append({
         'user_id': i,
         'sequences': sorted_sequences,
-        'probabilities': sorted_probs
+        'probabilities': sorted_probs,
+        'item_ids': item_ids
     })
+
+results_to_save = []
+for user_result in sorted_results:
+    results_to_save.append({
+        'user_id': int(user_result['user_id']),
+        'item_ids': user_result['item_ids'],
+        'probabilities': user_result['probabilities'].tolist()
+    })
+
+# 保存结果文件
+result_dir = "./results"
+result_file_path = os.path.join(result_dir, "test_results.json")
+with open(result_file_path, 'w', encoding='utf-8') as f:
+    json.dump(results_to_save, f, indent=2, ensure_ascii=False)
+
+print(f"结果已保存到: {result_file_path}")
+print(f"共保存了 {len(results_to_save)} 个用户的推荐结果")
+
+# print("\n转换后的结果 (包含item ID):")
+# for user_result in sorted_results:
+#     print(f"\n用户 {user_result['user_id'] + 1} 的推荐结果:")
+#     for j, (seq, prob, item_id) in enumerate(zip(user_result['sequences'], 
+#                                                 user_result['probabilities'], 
+#                                                 user_result['item_ids'])):
+#         # 移除填充token
+#         non_pad_tokens = [token.item() for token in seq if token != 0]
+#         print(f"  排名 {j+1}: tokens={non_pad_tokens}, item_id={item_id}, 概率: {prob.item():.6f}")
 
 
 # # 打印排序后的结果

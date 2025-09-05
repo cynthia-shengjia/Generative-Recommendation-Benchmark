@@ -53,7 +53,7 @@ def get_rqvae_config(output_dirs: dict, device: torch.device, config_overrides: 
     """获取RQ-VAE tokenizer的配置"""
     config = {
         'data_text_files': './data/Beauty/item2title.pkl',
-        'text_encoder_model': '/home/zhenxiangxv/model/sentence-t5-base',
+        'text_encoder_model': '/home/lz/code/model/sentence-t5-base',
         'tokenizer_path':os.path.join(output_dirs['tokenizer'], 'tokenizer.pkl'),
         'interaction_files': './data/Beauty/user2item.pkl',
         'save_path': os.path.join(output_dirs['tokenizer'], 'item2tokens.json'),
