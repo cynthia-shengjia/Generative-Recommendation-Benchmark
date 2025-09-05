@@ -164,6 +164,9 @@ class SeqModelTrainingDataset(Dataset):
         
         for user_id, item_seq in self.user_seqs.items():
             if self.mode == 'train':
+                # 训练集需要截断倒数的两个item (倒数第二个item作为valid，倒数第一个item作为test)
+                item_seq = item_seq[:-2]
+
                 n_return_examples = max(len(item_seq) - max_item_seq_len, 1)
                 
                 # 处理第一个窗口（前n个物品）
