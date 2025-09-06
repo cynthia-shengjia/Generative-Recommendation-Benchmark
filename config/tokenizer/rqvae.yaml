@@ -11,7 +11,7 @@ dropout_prob: 0.1
 loss_type: "mse"
 quant_loss_weight: 1.0
 commitment_beta: 0.25
-rq_kmeans_init: false
+rq_kmeans_init: true
 kmeans_iters: 10
 learning_rate: 0.4
 epochs: 1
