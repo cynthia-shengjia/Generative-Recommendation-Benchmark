@@ -6,3 +6,5 @@ scikit_learn==1.7.1
 torch==2.1.2+cu118
 tqdm==4.64.1
 transformers==4.37.0
+hydra-core
+omegaconf

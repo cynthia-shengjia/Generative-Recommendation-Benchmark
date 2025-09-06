@@ -1,0 +1,20 @@
+# RQ-VAE配置
+data_text_files: "./data/ToysAndGames/item2title.pkl"
+text_encoder_model: "/home/zsj/models/sentence-t5-base/sentence-t5-base"
+interaction_files: "./data/ToysAndGames/user2item.pkl"
+sent_emb_dim: 768
+n_codebooks: 3
+codebook_size: 256
+rq_e_dim: 32
+rq_layers: [512, 256, 128]
+dropout_prob: 0.1
+loss_type: "mse"
+quant_loss_weight: 1.0
+commitment_beta: 0.25
+rq_kmeans_init: false
+kmeans_iters: 10
+learning_rate: 0.4
+epochs: 1
+batch_size: 1024
+log_interval: 10
+embedding_strategy: "mean_pooling"

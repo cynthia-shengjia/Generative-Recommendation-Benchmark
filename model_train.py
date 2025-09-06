@@ -132,10 +132,11 @@ def train_model(
                 progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'step': global_step})
 
         accelerator.wait_for_everyone()
-        save_path = os.path.join(full_checkpoint_dir, f"epoch_{epoch + 1}")
-        accelerator.save_state(save_path)
-        if accelerator.is_main_process:
-            logger.info(f"Epoch {epoch + 1} 完成。检查点已保存至: {save_path}")
+        if (epoch + 1) % 25 == 0:
+            save_path = os.path.join(full_checkpoint_dir, f"epoch_{epoch + 1}")
+            accelerator.save_state(save_path)
+            if accelerator.is_main_process:
+                logger.info(f"Epoch {epoch + 1} 完成。检查点已保存至: {save_path}")
 
         if num_steps is not None and global_step >= num_steps and accelerator.is_main_process:
             logger.info(f"已达到目标步数 {num_steps}，训练提前结束。")

@@ -1,0 +1,19 @@
+# 生成模型配置
+data_interaction_files: "./data/ToysAndGames/user2item.pkl"
+data_text_files: "./data/ToysAndGames/item2title.pkl"
+max_seq_len: 20
+padding_side: "left"
+ignored_label: -100
+vocab_size: 1024  # 256 * 4
+d_kv: 64
+d_ff: 1024
+num_layers: 4
+num_decoder_layers: 4
+num_heads: 6
+dropout_rate: 0.1
+tie_word_embeddings: true
+batch_size: 256
+test_batch_size: 1024
+learning_rate: 0.001
+num_epochs: 10
+num_steps: null

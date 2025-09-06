@@ -6,11 +6,16 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 from accelerate import Accelerator
 import logging 
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
 from rqvaePipeline import RQVAETrainingPipeline
 from model_train import create_custom_t5_model, train_model, test_model
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 def setup_logging(log_dir: str):
     log_filename = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     log_filepath = os.path.join(log_dir, log_filename)
@@ -34,6 +39,7 @@ def setup_logging(log_dir: str):
     logger.addHandler(console_handler)
     
     return logger
+
 def setup_output_directories(base_output_dir: str = "./output"):
     """设置输出目录结构"""
     dirs = {
@@ -48,42 +54,6 @@ def setup_output_directories(base_output_dir: str = "./output"):
         os.makedirs(dir_path, exist_ok=True)
     
     return dirs
-
-def get_rqvae_config(output_dirs: dict, device: torch.device, config_overrides: dict = None):
-    """获取RQ-VAE tokenizer的配置"""
-    config = {
-        'data_text_files': './data/ToysAndGames/item2title.pkl',
-        'text_encoder_model': '/home/zsj/models/sentence-t5-base/sentence-t5-base',
-        'tokenizer_path':os.path.join(output_dirs['tokenizer'], 'tokenizer.pkl'),
-        'interaction_files': './data/ToysAndGames/user2item.pkl',
-        'save_path': os.path.join(output_dirs['tokenizer'], 'item2tokens.json'),
-        'checkpoint_path': os.path.join(output_dirs['tokenizer'], 'tokenizer_checkpoint.pth'),
-        'sent_emb_dim': 768, 'n_codebooks': 3, 'codebook_size': 256,
-        'rq_e_dim': 32, 'rq_layers': [512, 256, 128], 'dropout_prob': 0.1,
-        'loss_type': 'mse', 'quant_loss_weight': 1.0, 'commitment_beta': 0.25,
-        'rq_kmeans_init': True, 'kmeans_iters': 10, 'learning_rate': 0.4,
-        'epochs': 20000, 'batch_size': 1024, 'device': device, 'log_interval': 10,
-        'embedding_strategy': "mean_pooling",
-    }
-    if config_overrides: config.update(config_overrides)
-    return config
-
-def get_model_config(output_dirs: dict, dataset_name: str, device: torch.device, config_overrides: dict = None):
-    """获取生成模型的配置"""
-    config = {
-        'dataset_name': dataset_name,
-        'data_interaction_files': './data/ToysAndGames/user2item.pkl',
-        'data_text_files': './data/ToysAndGames/item2title.pkl',
-        'max_seq_len': 20, 'padding_side': 'left', 'ignored_label': -100,
-        'vocab_size': 256 * 4, 'd_kv': 64, 'd_ff': 1024, 'num_layers': 4,
-        'num_decoder_layers': 4, 'num_heads': 6, 'dropout_rate': 0.1,
-        'tie_word_embeddings': True, 'batch_size': 128, 'test_batch_size': 1024, 'learning_rate': 0.001,
-        'num_epochs': 10000, 'num_steps': None,
-        'model_save_path': os.path.join(output_dirs['model'], f'{dataset_name}_final_model.pt'),
-        'checkpoint_dir': output_dirs['checkpoints'], 'device': device,
-    }
-    if config_overrides: config.update(config_overrides)
-    return config
 
 def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain: bool = False):
     """阶段1: 训练RQ-VAE tokenizer"""
@@ -228,41 +198,40 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
             traceback.print_exc()
         return False
 
-def main():
+@hydra.main(version_base=None, config_path="config", config_name="config")
+def main(cfg: DictConfig):
     """主函数"""
     accelerator = Accelerator()
     device = accelerator.device
 
-    parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--dataset', type=str, default='Toys and Games', choices=['Beauty', 'Sports and Outdoors', 'Toys and Games'], help='数据集名称')
-    parser.add_argument('--output_dir', type=str, default='/home/zsj/models/tigger-lr-1e-3', help='输出目录')
-    parser.add_argument('--force_retrain_tokenizer', action='store_true', help='强制重新训练tokenizer')
-    parser.add_argument('--force_retrain_model', action='store_true', help='强制重新训练生成模型')
-    parser.add_argument('--skip_tokenizer', action='store_true', help='跳过tokenizer训练')
-    parser.add_argument('--skip_model', action='store_true', help='跳过生成模型训练')
-    
-    args = parser.parse_args()
-    
+    # 设置CUDA设备
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(cfg.cuda)
+
     logger = None
     
-    output_dirs = setup_output_directories(args.output_dir)
+    output_dirs = setup_output_directories(cfg.output_dir)
     if accelerator.is_main_process:
         logger = setup_logging(output_dirs['logs'])
         logger.info(f"输出目录已设置: {output_dirs['base']}")
-        logger.info(f"数据集: {args.dataset}")
-        logger.info(f"输出目录: {args.output_dir}")
+        logger.info(f"数据集: {cfg.dataset}")
+        logger.info(f"输出目录: {cfg.output_dir}")
         logger.info(f"当前进程运行设备: {device}")
         logger.info(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"日志文件保存在: {output_dirs['logs']}")
     
     success = True
     
-    rqvae_config = get_rqvae_config(output_dirs, device)
+    # 获取RQ-VAE配置
+    rqvae_config = OmegaConf.to_container(cfg.tokenizer, resolve=True)
+    rqvae_config['device'] = device
+    rqvae_config['tokenizer_path'] = os.path.join(output_dirs['tokenizer'], 'tokenizer.pkl')
+    rqvae_config['save_path'] = os.path.join(output_dirs['tokenizer'], 'item2tokens.json')
+    rqvae_config['checkpoint_path'] = os.path.join(output_dirs['tokenizer'], 'tokenizer_checkpoint.pth')
     
-    if not args.skip_tokenizer:
+    if not cfg.skip_tokenizer:
         if accelerator.is_main_process:
             tokenizer_success = stage1_train_tokenizer(
-                rqvae_config, output_dirs, force_retrain=args.force_retrain_tokenizer
+                rqvae_config, output_dirs, force_retrain=cfg.force_retrain_tokenizer
             )
             if not tokenizer_success:
                 logger.info("Tokenizer训练失败，终止流程")
@@ -272,14 +241,20 @@ def main():
     elif accelerator.is_main_process:
         logger.info("跳过tokenizer训练阶段")
     
-    if not args.skip_model and success:
-        model_config = get_model_config(output_dirs, args.dataset, device)
+    if not cfg.skip_model and success:
+        # 获取模型配置
+        model_config = OmegaConf.to_container(cfg.model, resolve=True)
+        model_config['device'] = device
+        model_config['dataset_name'] = cfg.dataset
+        model_config['model_save_path'] = os.path.join(output_dirs['model'], f"{cfg.dataset}_final_model.pt")
+        model_config['checkpoint_dir'] = output_dirs['checkpoints']
+        
         model_success = stage2_train_generation_model(
             model_config, rqvae_config, output_dirs, accelerator,
-            force_retrain=args.force_retrain_model,logger=logger
+            force_retrain=cfg.force_retrain_model,logger=logger
         )
         success = success and model_success
-    elif args.skip_model and accelerator.is_main_process:
+    elif cfg.skip_model and accelerator.is_main_process:
         logger.info("跳过生成模型训练阶段")
     
     if accelerator.is_main_process:
@@ -292,5 +267,6 @@ def main():
         logger.info(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*60)
     accelerator.wait_for_everyone()
+
 if __name__ == '__main__':
     main()

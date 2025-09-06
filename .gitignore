@@ -7,3 +7,6 @@
 *.pyc
 *.pyo
 *.pyd
+
+# hydra
+/outputs/
