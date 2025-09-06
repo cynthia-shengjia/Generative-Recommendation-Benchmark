@@ -7,8 +7,14 @@ from accelerate import Accelerator
 from transformers import get_linear_schedule_with_warmup
 from genrec.models.CustomT5.T5Model import CustomT5ForConditionalGeneration
 from genrec.models.CustomT5.T5Config import CustomT5Config
+from genrec.tokenizers.TigerTokenizer import TigerTokenizer
+from genrec.cbs_structure.generate_trie import Trie, prefix_allowed_tokens_fn
+from utils import calc_ndcg, tokens_to_item_id
+from typing import List, Dict, Any
+import math
 import logging
 import re
+
 def create_custom_t5_model(
     vocab_size: int,
     d_kv: int = 64,         # 每个注意力头的维度
@@ -138,3 +144,145 @@ def train_model(
     if accelerator.is_main_process:
         logger.info("\n训练完成。")
     return accelerator.unwrap_model(model)
+
+
+def test_model(
+    model: CustomT5ForConditionalGeneration,
+    test_dataloader: torch.utils.data.DataLoader,
+    accelerator: Accelerator,
+    tokenizer: TigerTokenizer,
+    k_list: List[int] = [1, 5, 10],
+    num_beams: int = 10,
+    max_gen_length: int = 5,  # 生成序列的最大长度
+    logger: logging.Logger = None
+) -> Dict[str, float]:
+    """
+    测试模型并计算NDCG@K和Hit@K指标
+    
+    参数:
+        model: 已训练的模型
+        test_dataloader: 测试数据加载器
+        accelerator: Accelerator实例
+        tokenizer: 分词器，包含tokens2item和item2tokens映射
+        k_list: 要计算的K值列表
+        num_beams: beam search的beam数量
+        max_gen_length: 生成序列的最大长度
+        logger: 日志记录器
+    
+    返回:
+        包含各项指标的字典
+    """
+    model.eval()
+    
+    # 初始化Trie结构和约束函数
+    tokens_to_item_map = tokenizer.tokens2item
+    candidate_trie = Trie(tokenizer.item2tokens)
+    prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
+    
+    # 初始化指标累计器
+    metrics = {f'hit@{k}': 0 for k in k_list}
+    metrics.update({f'ndcg@{k}': 0 for k in k_list})
+    total_samples = 0
+    
+    # 获取设备
+    device = accelerator.device
+    
+    with torch.no_grad():
+        progress_bar = tqdm(test_dataloader, desc="Testing", disable=not accelerator.is_main_process)
+        
+        for batch_idx, batch in enumerate(progress_bar):
+            # 将数据移动到设备
+            encoder_input_ids = batch['encoder_input_ids'].to(device)
+            encoder_attention_mask = batch['encoder_attention_mask'].to(device)
+            
+            # 获取真实物品ID
+            true_item_ids = batch['label_id'].tolist()
+            # 使用beam search生成序列
+            outputs = model.generate(
+                encoder_input_ids=encoder_input_ids,
+                encoder_attention_mask=encoder_attention_mask,
+                max_length=max_gen_length,
+                num_beams=num_beams,
+                num_return_sequences=num_beams,
+                early_stopping=True,
+                decoder_start_token_id=0,
+                output_scores=True,
+                return_dict_in_generate=True,
+                prefix_allowed_tokens_fn=prefix_allowed_fn  # 使用Trie约束
+            )
+            
+            # 获取生成的序列和分数
+            generated_ids = outputs.sequences
+            sequences_scores = outputs.sequences_scores
+            
+            # 重塑结果以便按样本分组
+            batch_size = encoder_input_ids.size(0)
+            generated_ids_reshaped = generated_ids.view(batch_size, num_beams, -1)[:, :, 1:]
+            probabilities_reshaped = torch.exp(sequences_scores).view(batch_size, num_beams)
+            
+            # 处理每个样本
+            for i in range(batch_size):
+                # 获取当前样本的真实物品ID
+                true_item_id = true_item_ids[i]
+                
+                # 获取当前样本的所有生成序列和概率
+                user_sequences = generated_ids_reshaped[i]
+                user_probs = probabilities_reshaped[i]
+                
+                # 按概率从高到低排序
+                sorted_indices = torch.argsort(user_probs, descending=True)
+                sorted_sequences = user_sequences[sorted_indices]
+                
+                # 将tokens转换为item ID
+                item_ids = []
+                for seq in sorted_sequences:
+                    item_id = tokens_to_item_id(seq, tokens_to_item_map)
+                    item_ids.append(item_id)
+                
+                
+                # 计算每个K值的指标
+                for k in k_list:
+                    # 取前k个推荐物品
+                    top_k_items = item_ids[:k]
+                    
+                    # 计算Hit@K
+                    hit = 1 if true_item_id in top_k_items else 0
+                    metrics[f'hit@{k}'] += hit
+                    
+                    # 计算NDCG@K
+                    if hit:
+                        rank = top_k_items.index(true_item_id) + 1
+                        ndcg = 1 / math.log2(rank + 1)
+                    else:
+                        ndcg = 0
+                    metrics[f'ndcg@{k}'] += ndcg
+                
+                total_samples += 1
+            
+            # 更新进度条
+            if accelerator.is_main_process and total_samples > 0:
+                current_metrics = {}
+                for k in k_list:
+                    current_metrics[f"hit@{k}"] = metrics[f"hit@{k}"] / total_samples
+                progress_bar.set_postfix(current_metrics)
+    
+    # 计算平均指标
+    if total_samples > 0:
+        for k in k_list:
+            metrics[f'hit@{k}'] /= total_samples
+            metrics[f'ndcg@{k}'] /= total_samples
+    else:
+        # 如果没有有效样本，设置默认值
+        for k in k_list:
+            metrics[f'hit@{k}'] = 0
+            metrics[f'ndcg@{k}'] = 0
+    
+    # 打印结果
+    if accelerator.is_main_process and logger:
+        logger.info("\n测试结果:")
+        for k in k_list:
+            logger.info(f"Hit@{k}: {metrics[f'hit@{k}']:.4f}, NDCG@{k}: {metrics[f'ndcg@{k}']:.4f}")
+        logger.info(f"总有效样本数: {total_samples}")
+    
+    return metrics
+

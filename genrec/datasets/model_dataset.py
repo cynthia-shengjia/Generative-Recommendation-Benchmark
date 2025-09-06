@@ -273,6 +273,7 @@ class SeqModelTrainingDataset(Dataset):
                     'decoder_input_ids': torch.tensor(decoder_input_ids, dtype=torch.long),
                     'decoder_attention_mask': torch.tensor(decoder_attention_mask, dtype=torch.long),
                     'labels': torch.tensor(labels, dtype=torch.long),
+                    'label_id': target_item[0],
                     'seq_lens': seq_lens
                 })
         

@@ -40,3 +40,20 @@ def tokens_to_item_id(tokens_sequence, tokens_to_item_map):
     
     # 查找对应的item ID
     return tokens_to_item_map.get(tokens_tuple, None)
+
+
+
+def calc_ndcg(rank, k):
+    """
+    计算NDCG值
+    
+    参数:
+        rank: 真实物品在推荐列表中的位置(从1开始)
+        k: 推荐列表长度
+    
+    返回:
+        NDCG值
+    """
+    if rank <= k:
+        return 1 / math.log2(rank + 1)
+    return 0

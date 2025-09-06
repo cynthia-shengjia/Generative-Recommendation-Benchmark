@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from accelerate import Accelerator
 import logging 
 from rqvaePipeline import RQVAETrainingPipeline
-from model_train import create_custom_t5_model, train_model
+from model_train import create_custom_t5_model, train_model, test_model
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -77,7 +77,7 @@ def get_model_config(output_dirs: dict, dataset_name: str, device: torch.device,
         'max_seq_len': 20, 'padding_side': 'left', 'ignored_label': -100,
         'vocab_size': 256 * 4, 'd_kv': 64, 'd_ff': 1024, 'num_layers': 4,
         'num_decoder_layers': 4, 'num_heads': 6, 'dropout_rate': 0.1,
-        'tie_word_embeddings': True, 'batch_size': 128, 'learning_rate': 0.001,
+        'tie_word_embeddings': True, 'batch_size': 128, 'test_batch_size': 1024, 'learning_rate': 0.001,
         'num_epochs': 2, 'num_steps': None,
         'model_save_path': os.path.join(output_dirs['model'], f'{dataset_name}_final_model.pt'),
         'checkpoint_dir': output_dirs['checkpoints'], 'device': device,
@@ -166,16 +166,16 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
             logger.info(f"模型总参数数量: {total_params:,}")
             logger.info("创建数据集...")
 
-        dataset = SeqModelTrainingDataset(
+        train_dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
             tokenizer=tokenizer, config=model_config, mode='train'
         )
         train_dataloader = DataLoader(
-            dataset, batch_size=model_config['batch_size'], shuffle=True, num_workers=4
+            train_dataset, batch_size=model_config['batch_size'], shuffle=True, num_workers=4
         )
         if accelerator.is_main_process:
-            logger.info(f"数据集大小: {len(dataset)} 个样本")
+            logger.info(f"数据集大小: {len(train_dataset)} 个样本")
             logger.info(f"批次数量: {len(train_dataloader)} 个批次")
             logger.info("开始训练生成模型...")
 
@@ -186,6 +186,27 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
             dataset_name=model_config['dataset_name'], accelerator=accelerator,logger=logger,
         )
         
+
+        test_dataset = SeqModelTrainingDataset(
+            data_interaction_files=model_config['data_interaction_files'],
+            data_text_files=model_config['data_text_files'],
+            tokenizer=tokenizer, config=model_config, mode='test'
+        )
+        test_dataloader = DataLoader(
+            test_dataset, batch_size=model_config['test_batch_size'], shuffle=False, num_workers=4
+        )
+
+        metrics = test_model(
+            model = trained_model,
+            test_dataloader = test_dataloader,
+            accelerator = accelerator,
+            tokenizer = tokenizer,
+            k_list = [1,5,10],
+            num_beams = 10,
+            max_gen_length = tokenizer.digits + 1,
+            logger=logger
+        )
+
         if accelerator.is_main_process:
             logger.info(f"保存最终模型到: {model_save_path}")
             torch.save(trained_model.state_dict(), model_save_path)
