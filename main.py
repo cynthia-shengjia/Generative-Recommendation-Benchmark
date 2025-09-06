@@ -203,10 +203,7 @@ def main(cfg: DictConfig):
     """主函数"""
     accelerator = Accelerator()
     device = accelerator.device
-
     # 设置CUDA设备
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(cfg.cuda)
-
     logger = None
     
     output_dirs = setup_output_directories(cfg.output_dir)
