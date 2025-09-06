@@ -53,7 +53,7 @@ def get_rqvae_config(output_dirs: dict, device: torch.device, config_overrides: 
     """获取RQ-VAE tokenizer的配置"""
     config = {
         'data_text_files': './data/Beauty/item2title.pkl',
-        'text_encoder_model': '/home/lz/code/model/sentence-t5-base',
+        'text_encoder_model': '/home/zsj/models/sentence-t5-base/sentence-t5-base',
         'tokenizer_path':os.path.join(output_dirs['tokenizer'], 'tokenizer.pkl'),
         'interaction_files': './data/Beauty/user2item.pkl',
         'save_path': os.path.join(output_dirs['tokenizer'], 'item2tokens.json'),
@@ -214,7 +214,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--dataset', type=str, default='Beauty', choices=['Beauty', 'Sports and Outdoors', 'Toys and Games'], help='数据集名称')
-    parser.add_argument('--output_dir', type=str, default='./output', help='输出目录')
+    parser.add_argument('--output_dir', type=str, default='/home/zsj/models/TIGGER', help='输出目录')
     parser.add_argument('--force_retrain_tokenizer', action='store_true', help='强制重新训练tokenizer')
     parser.add_argument('--force_retrain_model', action='store_true', help='强制重新训练生成模型')
     parser.add_argument('--skip_tokenizer', action='store_true', help='跳过tokenizer训练')

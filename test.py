@@ -6,57 +6,25 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 import logging 
 from model_train import create_custom_t5_model, train_model
-from generate_trie import Trie, prefix_allowed_tokens_fn
+from genrec.tokenizers.TigerTokenizer import TigerTokenizer
+from genrec.cbs_structure.generate_trie import Trie, prefix_allowed_tokens_fn
 import ast
+import os
+from main import  get_rqvae_config, setup_output_directories
+from accelerate import Accelerator
+from utils import tokens_to_item_id
 
-# 假设 model_train 模块中有 create_custom_t5_model 函数
-# from model_train import create_custom_t5_model, train_model
+accelerator = Accelerator()
+device = accelerator.device
 
-# 读取JSON文件
-def load_json_file(file_path):
-    with open(file_path, 'r') as f:
-        data = json.load(f)
-    return data
 
-# 处理JSON数据，在每个序列前添加0
-def process_json_data(json_data):
-    processed_items = []
-    for key, sequence in json_data.items():
-        # 在每个序列前添加0
-        processed_sequence = [0] + sequence
-        processed_items.append(processed_sequence)
-    return processed_items
-
-# 读取JSON文件并创建映射字典
-def create_token_to_item_mapping(json_file_path):
-    with open(json_file_path, 'r') as f:
-        data = json.load(f)
-    
-    token_to_item_map = {}
-    
-    for key, value in data.items():
-        try:
-            tokens_tuple = ast.literal_eval(key)
-            tokens_list = list(tokens_tuple)
-        except:
-            cleaned_key = key.strip('()').replace(' ', '')
-            tokens_list = [int(x) for x in cleaned_key.split(',') if x]
-        
-        # 创建映射
-        token_to_item_map[tuple(tokens_list)] = value
-
-    return token_to_item_map
-
-# 构建Trie树
-item2tokens_json_file_path = "/home/lz/code/Generative-Recommendation-Benchmark/output/tokenizer_model/item2tokens.json"
-json_data = load_json_file(item2tokens_json_file_path)
-test_items = process_json_data(json_data)
-candidate_trie = Trie(test_items)
+tokenizer = TigerTokenizer.load("/home/zsj/models/TIGGER/tokenizer_model/tokenizer.pkl")
+tokenizer.rq_vae.to(accelerator.device)
+tokens_to_item_map = tokenizer.tokens2item
+candidate_trie = Trie(tokenizer.item2tokens)
 prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
 
-# 创建tokens2item字典
-tokens2item_json_file_path = "/home/lz/code/Generative-Recommendation-Benchmark/output/tokenizer_model/item2tokens_tokens2item.json"
-tokens_to_item_map = create_token_to_item_mapping(tokens2item_json_file_path)
+
 
 model_config = {
     'dataset_name': "hello",
@@ -68,7 +36,7 @@ model_config = {
     'tie_word_embeddings': True, 'batch_size': 128, 'learning_rate': 0.001,
     'num_epochs': 2, 'num_steps': None,
     'model_save_path': "asd",
-    'checkpoint_dir': "asd", 'device': "cpu",
+    'checkpoint_dir': "asd", 'device': device,
 }
 
 # 创建模型
@@ -125,19 +93,6 @@ print(generated_ids_reshaped)
 print("\n每个序列的概率:")
 print(probabilities_reshaped)
 
-# 将tokens转化为item_ID
-def tokens_to_item_id(tokens_sequence, tokens_to_item_map):
-    # 如果是张量，转换为列表
-    if torch.is_tensor(tokens_sequence):
-        tokens_list = tokens_sequence.tolist()
-    else:
-        tokens_list = tokens_sequence
-    
-    # 转换为tuple作为字典的key
-    tokens_tuple = tuple(tokens_list)
-    
-    # 查找对应的item ID
-    return tokens_to_item_map.get(tokens_tuple, None)
 
 
 # 对每个用户的生成序列按概率排序
@@ -165,23 +120,23 @@ for i in range(batch_size):
         'probabilities': sorted_probs,
         'item_ids': item_ids
     })
+print(sorted_results)
+# results_to_save = []
+# for user_result in sorted_results:
+#     results_to_save.append({
+#         'user_id': int(user_result['user_id']),
+#         'item_ids': user_result['item_ids'],
+#         'probabilities': user_result['probabilities'].tolist()
+#     })
 
-results_to_save = []
-for user_result in sorted_results:
-    results_to_save.append({
-        'user_id': int(user_result['user_id']),
-        'item_ids': user_result['item_ids'],
-        'probabilities': user_result['probabilities'].tolist()
-    })
+# # 保存结果文件
+# result_dir = "./results"
+# result_file_path = os.path.join(result_dir, "test_results.json")
+# with open(result_file_path, 'w', encoding='utf-8') as f:
+#     json.dump(results_to_save, f, indent=2, ensure_ascii=False)
 
-# 保存结果文件
-result_dir = "./results"
-result_file_path = os.path.join(result_dir, "test_results.json")
-with open(result_file_path, 'w', encoding='utf-8') as f:
-    json.dump(results_to_save, f, indent=2, ensure_ascii=False)
-
-print(f"结果已保存到: {result_file_path}")
-print(f"共保存了 {len(results_to_save)} 个用户的推荐结果")
+# print(f"结果已保存到: {result_file_path}")
+# print(f"共保存了 {len(results_to_save)} 个用户的推荐结果")
 
 # print("\n转换后的结果 (包含item ID):")
 # for user_result in sorted_results:
