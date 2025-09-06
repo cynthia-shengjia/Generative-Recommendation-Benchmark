@@ -124,7 +124,7 @@ class ItemEmbeddingDataset(Dataset):
         
         for _, row in item_titles_dataframe.iterrows():
             item_id = int(row['ItemID'])
-            item_context_info = row['Title']
+            item_context_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Description: {row['Description']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
             item_reviews[item_id] = item_context_info
         
         return item_reviews
