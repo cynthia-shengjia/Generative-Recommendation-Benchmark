@@ -24,6 +24,7 @@ class Trainer:
         
         os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
         self.tokenizer.to(self.device)
+        self.optimizer.move_optimizer_state_to_device(self.device)
 
     def _train_one_epoch(self, train_dataloader, epoch: int):
         self.tokenizer.train()
