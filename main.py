@@ -117,7 +117,7 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
         
         tokenizer = TigerTokenizer.load(tokenizer_object_path)
         
-        tokenizer.rq_vae.to(accelerator.device)
+        
         if accelerator.is_main_process:
             logger.info(f"成功加载tokenizer，包含 {len(tokenizer.item2tokens)} 个物品的token映射")
         
@@ -201,7 +201,7 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
     """主函数"""
-    accelerator = Accelerator()
+    accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
     # 设置CUDA设备
     logger = None
