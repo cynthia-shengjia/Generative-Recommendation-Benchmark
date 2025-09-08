@@ -22,11 +22,17 @@ class Trainer:
         self.device = torch.device(self.config.get('device'))
         self.log_interval = self.config.get('log_interval')
         self.checkpoint_path = self.config.get('checkpoint_path')
-        
+        self.save_interval = self.config.get('save_interval')
+
         os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
         self.tokenizer.to(self.device)
         self.optimizer.move_optimizer_state_to_device(self.device)
-    def _calculate_codebook_utilization(self, train_dataloader):
+
+        # 用于跟踪最佳模型
+        self.best_utilization = 0.0
+        self.best_epoch = 0
+
+    def _calculate_codebook_utilization(self, train_dataloader, log_output=True):
         """计算每层码本的利用率"""
         self.tokenizer.eval()
         
@@ -57,11 +63,13 @@ class Trainer:
             utilization_rate = used_codes / total_codes
             utilization_rates.append(utilization_rate)
             
-            logging.info(f"Layer {layer_idx + 1}: {used_codes}/{total_codes} codes used, "
-                        f"utilization rate: {utilization_rate:.4f}")
+            if log_output:
+                logging.info(f"Layer {layer_idx + 1}: {used_codes}/{total_codes} codes used, "
+                            f"utilization rate: {utilization_rate:.4f}")
         
         avg_utilization = np.mean(utilization_rates)
-        logging.info(f"Average codebook utilization rate: {avg_utilization:.4f}")
+        if log_output:
+            logging.info(f"Average codebook utilization rate: {avg_utilization:.4f}")
         
         return utilization_rates, avg_utilization
 
@@ -104,6 +112,21 @@ class Trainer:
         
         return avg_loss, avg_recon_loss, avg_commit_loss
 
+    def _save_checkpoint(self, epoch, avg_utilization=None, is_best=False):
+        """保存checkpoint"""
+        if is_best:
+            # 最佳模型直接保存到配置的checkpoint_path
+            torch.save(self.tokenizer.state_dict(), self.checkpoint_path)
+            logging.info(f"Best model saved to {self.checkpoint_path} (utilization: {avg_utilization:.4f})")
+            return self.checkpoint_path
+        else:
+            # 普通checkpoint包含epoch和利用率信息
+            base_path, ext = os.path.splitext(self.checkpoint_path)
+            checkpoint_filename = f"{base_path}_epoch{epoch+1}_util{avg_utilization:.4f}{ext}"
+            torch.save(self.tokenizer.state_dict(), checkpoint_filename)
+            logging.info(f"Checkpoint saved to {checkpoint_filename}")
+            return checkpoint_filename
+
     def fit(self, train_dataloader):
         logging.info("Start Training Tokenizer...")
 
@@ -116,12 +139,34 @@ class Trainer:
             # 每1000个epoch输出码本利用率
             if (epoch + 1) % 1000 == 0:
                 logging.info(f"\n=== Codebook Utilization Analysis at Epoch {epoch+1} ===")
-                utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader)
+                utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=True)
                 logging.info("=" * 60)
-        torch.save(self.tokenizer.state_dict(), self.checkpoint_path)
-        logging.info(f"Training complete. Final model saved to {self.checkpoint_path}")
+            # 每save_interval个epoch保存checkpoint
+            if (epoch + 1) % self.save_interval == 0:
+                utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=False)
+                self._save_checkpoint(epoch, avg_utilization)
 
+                if avg_utilization > self.best_utilization:
+                    self.best_utilization = avg_utilization
+                    self.best_epoch = epoch
+                    self._save_checkpoint(epoch, avg_utilization, is_best=True)
+                    logging.info(f"New best model found at epoch {epoch+1} with utilization: {avg_utilization:.4f}")
+                    
         # 最终码本利用率
         logging.info("\n=== Final Codebook Utilization Analysis ===")
-        utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader)
+        final_utilization_rates, final_avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=True)
         logging.info("=" * 60)
+        
+        # 保存最终模型checkpoint
+        self._save_checkpoint(self.epochs - 1, final_avg_utilization)
+        
+        # 如果最终模型比之前的最佳模型更好，也保存为最佳模型
+        if final_avg_utilization > self.best_utilization:
+            self.best_utilization = final_avg_utilization
+            self.best_epoch = self.epochs - 1
+            self._save_checkpoint(self.epochs - 1, final_avg_utilization, is_best=True)
+            logging.info(f"Final model is the best with utilization: {final_avg_utilization:.4f}")
+        else:
+            logging.info(f"Best model was at epoch {self.best_epoch+1} with utilization: {self.best_utilization:.4f}")
+        
+        logging.info(f"Training complete. Best utilization: {self.best_utilization:.4f} at epoch {self.best_epoch+1}")
