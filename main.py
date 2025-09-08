@@ -16,9 +16,16 @@ from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
 from transformers import T5ForConditionalGeneration
-
+import random
+import numpy as np
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    
 def setup_logging(log_dir: str):
     log_filename = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     log_filepath = os.path.join(log_dir, log_filename)
@@ -188,7 +195,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             eval_strategy="epoch",
             save_strategy="epoch",
             save_total_limit=2,
-            load_best_model_at_end=False,
+            load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
             logging_dir=output_dirs['logs'],
@@ -212,23 +219,6 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         trainer.train()
         accelerator.wait_for_everyone() 
 
-        if accelerator.is_main_process:
-            logger.info("正在加载最优模型...")
-            best_model_path = trainer.state.best_model_checkpoint
-            if best_model_path and os.path.exists(best_model_path):
-                logger.info(f"找到最优检查点: {best_model_path}")
-                
-                try:
-                    best_model = T5ForConditionalGeneration.from_pretrained(best_model_path)
-                    trainer.model.load_state_dict(best_model.state_dict())
-                    logger.info("成功加载最优模型")
-                except Exception as e:
-                    logger.warning(f"加载模型失败: {str(e)}")
-                    logger.info("将使用当前训练完成的模型")
-            else:
-                logger.info("未找到最优检查点，使用当前模型")
-        # 同步所有进程
-        accelerator.wait_for_everyone()
         
         # 使用约束beam search进行测试评估
         if accelerator.is_main_process:
@@ -261,6 +251,8 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
     """主函数"""
+    seed = getattr(cfg, 'seed', 42) 
+    set_seed(seed)
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
     # 设置CUDA设备
