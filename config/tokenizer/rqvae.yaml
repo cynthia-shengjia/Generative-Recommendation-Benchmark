@@ -17,4 +17,5 @@ learning_rate: 0.4
 epochs: 1
 batch_size: 1024
 log_interval: 10
+save_interval: 4000
 embedding_strategy: "mean_pooling"
