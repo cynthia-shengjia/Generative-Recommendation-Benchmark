@@ -445,23 +445,63 @@ def evaluate_model_with_constrained_beam_search(
                 for k in k_list:
                     current_metrics[f"hit@{k}"] = metrics[f"hit@{k}"] / total_samples
                 progress_bar.set_postfix(current_metrics)
+    metrics_tensor = torch.tensor([
+        total_samples,
+        *[metrics[f'hit@{k}'] for k in k_list],
+        *[metrics[f'ndcg@{k}'] for k in k_list]
+    ], dtype=torch.float32, device=device)
     
-    # 计算平均指标
-    if total_samples > 0:
+    gathered_metrics = accelerator.gather(metrics_tensor)
+    
+    if accelerator.is_main_process:
+        # 添加调试信息
+        logger.info(f"Original metrics_tensor shape: {metrics_tensor.shape}")
+        logger.info(f"Gathered metrics shape: {gathered_metrics.shape}")
+        logger.info(f"Gathered metrics dim: {gathered_metrics.dim()}")
+        logger.info(f"Number of processes: {accelerator.num_processes}")
+        
+        # gather flatten了所有进程结果
+        num_processes = accelerator.num_processes
+        metrics_per_process = len(metrics_tensor)
+        gathered_metrics = gathered_metrics.view(num_processes, metrics_per_process)
+        
+        total_gathered_samples = gathered_metrics[:, 0].sum().item()
+        
+        aggregated_metrics = {}
+        idx = 1
         for k in k_list:
-            metrics[f'hit@{k}'] /= total_samples
-            metrics[f'ndcg@{k}'] /= total_samples
+            aggregated_metrics[f'hit@{k}'] = gathered_metrics[:, idx].sum().item() / total_gathered_samples if total_gathered_samples > 0 else 0
+            idx += 1
+        for k in k_list:
+            aggregated_metrics[f'ndcg@{k}'] = gathered_metrics[:, idx].sum().item() / total_gathered_samples if total_gathered_samples > 0 else 0
+            idx += 1
+        
+        if logger:
+            logger.info(f"\n{mode}结果:")
+            for k in k_list:
+                logger.info(f"Hit@{k}: {aggregated_metrics[f'hit@{k}']:.4f}, NDCG@{k}: {aggregated_metrics[f'ndcg@{k}']:.4f}")
+            logger.info(f"总有效样本数: {int(total_gathered_samples)}")
+        
+        return aggregated_metrics
     else:
-        # 如果没有有效样本，设置默认值
-        for k in k_list:
-            metrics[f'hit@{k}'] = 0
-            metrics[f'ndcg@{k}'] = 0
+        return {f'hit@{k}': 0 for k in k_list} | {f'ndcg@{k}': 0 for k in k_list}
     
-    # 打印结果
-    if accelerator.is_main_process and logger:
-        logger.info(f"\n{mode}结果:")
-        for k in k_list:
-            logger.info(f"Hit@{k}: {metrics[f'hit@{k}']:.4f}, NDCG@{k}: {metrics[f'ndcg@{k}']:.4f}")
-        logger.info(f"总有效样本数: {total_samples}")
+    # # 计算平均指标
+    # if total_samples > 0:
+    #     for k in k_list:
+    #         metrics[f'hit@{k}'] /= total_samples
+    #         metrics[f'ndcg@{k}'] /= total_samples
+    # else:
+    #     # 如果没有有效样本，设置默认值
+    #     for k in k_list:
+    #         metrics[f'hit@{k}'] = 0
+    #         metrics[f'ndcg@{k}'] = 0
     
-    return metrics
+    # # 打印结果
+    # if accelerator.is_main_process and logger:
+    #     logger.info(f"\n{mode}结果:")
+    #     for k in k_list:
+    #         logger.info(f"Hit@{k}: {metrics[f'hit@{k}']:.4f}, NDCG@{k}: {metrics[f'ndcg@{k}']:.4f}")
+    #     logger.info(f"总有效样本数: {total_samples}")
+    
+    # return metrics
