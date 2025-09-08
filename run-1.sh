@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # 设置Hydra配置路径
-export HYDRA_CONFIG_PATH=conf
-export CUDA_VISIBLE_DEVICES=0
+export HYDRA_CONFIG_PATH=config
+export CUDA_VISIBLE_DEVICES=7
 tokenizer_batch_size=1024
-learning_rate=0.4
+learning_rate=0.01
 model_batch_size=256
-model_lr=0.01
+model_lr=0.001
 # 运行训练脚本
 python main.py \
     dataset="Toys and Games" \
@@ -17,4 +17,4 @@ python main.py \
     tokenizer.epochs=20000 \
     model.batch_size=$model_batch_size \
     model.learning_rate=$model_lr \
-    model.num_epochs=200
+    model.num_epochs=1

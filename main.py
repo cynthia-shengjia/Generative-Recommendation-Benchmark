@@ -10,9 +10,12 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from rqvaePipeline import RQVAETrainingPipeline
-from model_train import create_custom_t5_model, train_model, test_model
+from model_train import create_custom_t5_model, train_model, evaluate_model_with_constrained_beam_search
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
+from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
+from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
+from transformers import T5ForConditionalGeneration
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -86,8 +89,8 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain:
         traceback.print_exc()
         return False
 
-def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output_dirs: dict, accelerator: Accelerator,logger, force_retrain: bool = False):
-    """阶段2: 训练生成模型"""
+def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accelerator, logger, force_retrain=False):
+    """阶段2: 训练生成模型（使用约束beam search进行评估）"""
     if accelerator.is_main_process:
         logger.info("\n" + "="*60)
         logger.info("阶段2: 训练生成模型")
@@ -111,89 +114,146 @@ def stage2_train_generation_model(model_config: dict, rqvae_config: dict, output
             logger.info(f"错误: 找不到完整的tokenizer对象文件: {tokenizer_object_path}")
             logger.info("请先运行阶段1进行训练。")
         return False
+    
     try:
         if accelerator.is_main_process:
             logger.info(f"正在从 {tokenizer_object_path} 加载完整的tokenizer...")
-        
         tokenizer = TigerTokenizer.load(tokenizer_object_path)
-        
-        
         if accelerator.is_main_process:
             logger.info(f"成功加载tokenizer，包含 {len(tokenizer.item2tokens)} 个物品的token映射")
-        
-        if accelerator.is_main_process:
             logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
             logger.info("创建生成模型...")
-
-        model = create_custom_t5_model(
-            vocab_size=tokenizer.vocab_size, d_kv=model_config['d_kv'], d_ff=model_config['d_ff'],
-            num_layers=model_config['num_layers'], num_decoder_layers=model_config['num_decoder_layers'],
-            num_heads=model_config['num_heads'], dropout_rate=model_config['dropout_rate'],
-            tie_word_embeddings=model_config['tie_word_embeddings']
+        # 创建模型
+        from model_train import create_t5_model
+        model = create_t5_model(
+            vocab_size=tokenizer.vocab_size,
+            model_config=model_config
         )
+
         if accelerator.is_main_process:
             total_params = sum(p.numel() for p in model.parameters())
             logger.info(f"模型总参数数量: {total_params:,}")
             logger.info("创建数据集...")
 
+        # 创建数据集
         train_dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
             tokenizer=tokenizer, config=model_config, mode='train'
         )
-        train_dataloader = DataLoader(
-            train_dataset, batch_size=model_config['batch_size'], shuffle=True, num_workers=4
+        valid_dataset = SeqModelTrainingDataset(
+            data_interaction_files=model_config['data_interaction_files'],
+            data_text_files=model_config['data_text_files'],
+            tokenizer=tokenizer, config=model_config, mode='valid'
         )
-        if accelerator.is_main_process:
-            logger.info(f"数据集大小: {len(train_dataset)} 个样本")
-            logger.info(f"批次数量: {len(train_dataloader)} 个批次")
-            logger.info("开始训练生成模型...")
-
-        trained_model = train_model(
-            model=model, train_dataloader=train_dataloader,
-            learning_rate=model_config['learning_rate'], num_epochs=model_config['num_epochs'],
-            num_steps=model_config.get('num_steps'), checkpoint_dir=model_config['checkpoint_dir'],
-            dataset_name=model_config['dataset_name'], accelerator=accelerator,logger=logger,
-        )
-        
-
         test_dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
             tokenizer=tokenizer, config=model_config, mode='test'
         )
+
+        # 创建数据整理器
+        train_data_collator = TrainSeqRecDataCollator(
+            max_seq_len=train_dataset.max_token_len,
+            pad_token_id=tokenizer.pad_token,
+            eos_token_id=tokenizer.eos_token,
+            tokens_per_item=train_dataset.tokens_per_item
+        )
+        
+        test_data_collator = TestSeqRecDataCollator(
+            max_seq_len=train_dataset.max_token_len,
+            pad_token_id=tokenizer.pad_token,
+            eos_token_id=tokenizer.eos_token,
+            tokens_per_item=train_dataset.tokens_per_item
+        )
+        # 创建验证和测试数据加载器（用于自定义评估）
+ 
         test_dataloader = DataLoader(
-            test_dataset, batch_size=model_config['test_batch_size'], shuffle=False, num_workers=4
+            test_dataset, 
+            batch_size=model_config['test_batch_size'],
+            shuffle=False,
+            collate_fn=test_data_collator # 使用 HF 提供的 collator
+        )
+        
+        # 使用accelerator准备数据加载器
+        test_dataloader = accelerator.prepare(test_dataloader)
+
+        # 训练参数
+        training_args = TrainingArguments(
+            output_dir=output_dirs['model'],
+            num_train_epochs=model_config['num_epochs'],
+            per_device_train_batch_size=model_config['batch_size'],
+            per_device_eval_batch_size=model_config['test_batch_size'],
+            learning_rate=model_config['learning_rate'],
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            save_total_limit=2,
+            load_best_model_at_end=False,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            logging_dir=output_dirs['logs'],
+            logging_steps=100,
+            report_to=[],
+            ddp_find_unused_parameters=False,
+            remove_unused_columns=False,
         )
 
-        metrics = test_model(
-            model = trained_model,
-            test_dataloader = test_dataloader,
-            accelerator = accelerator,
-            tokenizer = tokenizer,
-            k_list = [1,5,10],
-            num_beams = 10,
-            max_gen_length = tokenizer.digits + 1,
-            logger=logger
+        # 创建Trainer
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=valid_dataset,
+            data_collator=train_data_collator,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=20)],
         )
+
+        # 训练模型
+        trainer.train()
+        accelerator.wait_for_everyone() 
 
         if accelerator.is_main_process:
-            logger.info(f"保存最终模型到: {model_save_path}")
-            torch.save(trained_model.state_dict(), model_save_path)
-
-            config_save_path = model_save_path.replace('.pt', '_config.json')
-            config_to_save = model_config.copy()
-            config_to_save['vocab_size'] = tokenizer.vocab_size
-            if 'device' in config_to_save and not isinstance(config_to_save['device'], str):
-                config_to_save['device'] = str(config_to_save['device'])
-            with open(config_save_path, 'w') as f:
-                json.dump(config_to_save, f, indent=2)
-            logger.info("生成模型训练完成!")
+            logger.info("正在加载最优模型...")
+            best_model_path = trainer.state.best_model_checkpoint
+            if best_model_path and os.path.exists(best_model_path):
+                logger.info(f"找到最优检查点: {best_model_path}")
+                
+                try:
+                    best_model = T5ForConditionalGeneration.from_pretrained(best_model_path)
+                    trainer.model.load_state_dict(best_model.state_dict())
+                    logger.info("成功加载最优模型")
+                except Exception as e:
+                    logger.warning(f"加载模型失败: {str(e)}")
+                    logger.info("将使用当前训练完成的模型")
+            else:
+                logger.info("未找到最优检查点，使用当前模型")
+        # 同步所有进程
+        accelerator.wait_for_everyone()
+        
+        # 使用约束beam search进行测试评估
+        if accelerator.is_main_process:
+            logger.info("使用约束beam search进行测试评估...")
+        test_metrics = evaluate_model_with_constrained_beam_search(
+            model=model,
+            eval_dataloader=test_dataloader,
+            accelerator=accelerator,
+            tokenizer=tokenizer,
+            k_list=[1, 5, 10],
+            num_beams=model_config.get('num_beams', 10),
+            max_gen_length=model_config.get('max_gen_length', 5),
+            logger=logger,
+            mode="Test"
+        )
+        
+        # 保存最终模型
+        trainer.save_model(output_dirs['model'])
+        if accelerator.is_main_process:
+            logger.info("生成模型训练和评估完成!")
         
         return True
     except Exception as e:
         if accelerator.is_main_process:
-            logger.info(f"生成模型训练失败: {str(e)}")
+            logger.error(f"生成模型训练失败: {str(e)}")
             import traceback
             traceback.print_exc()
         return False

@@ -13,7 +13,7 @@ num_heads: 6
 dropout_rate: 0.1
 tie_word_embeddings: true
 batch_size: 256
-test_batch_size: 1024
+test_batch_size: 256
 learning_rate: 0.001
 num_epochs: 10
 num_steps: null
