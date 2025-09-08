@@ -106,26 +106,29 @@ class ItemEmbeddingDataset(Dataset):
         if strategy not in valid_strategies:
             raise ValueError(f"Invalid strategy. Choose from: {valid_strategies}")
         self.embedding_strategy = strategy
-    
-    def _load_item_reviews(self) -> Dict[int, str]:
+    def _load_item_reviews(self) -> Dict[int, Tuple[str, str]]:
         """
-        Load item reviews from the text data file.
+        Load item reviews from the text data file, splitting into basic info and description.
         
         Args:
             None
             
         Returns:
-            Dictionary mapping item IDs to their corresponding text reviews
+            Dictionary mapping item IDs to tuple of (basic_info, description)
         """
-        item_reviews = defaultdict(str)
+        item_reviews = defaultdict(lambda: ("", ""))
         
         with open(self.data_text_files, 'rb') as f:
             item_titles_dataframe = pickle.load(f)
         
         for _, row in item_titles_dataframe.iterrows():
             item_id = int(row['ItemID'])
-            item_context_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Description: {row['Description']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
-            item_reviews[item_id] = item_context_info
+            # 基本信息部分（不包含描述）
+            basic_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
+            # 描述部分
+            description = str(row['Description']) if row['Description'] else ""
+            
+            item_reviews[item_id] = (basic_info, description)
         
         return item_reviews
     
@@ -184,27 +187,75 @@ class ItemEmbeddingDataset(Dataset):
     def _transform_semantic_embeddings(self) -> Dict[int, np.ndarray]:
         """
         Transform item texts to embeddings using the specified model.
+        Process basic info and description separately, then average them.
         
         Args:
             None
             
         Returns:
-            Dictionary mapping item IDs to their corresponding embeddings
+            Dictionary mapping item IDs to their corresponding averaged embeddings
         """
         item_embeddings = {}
         
         # Batch processing for efficiency
         batch_size = 32  # Adjust based on GPU memory
         item_ids = list(self.item_reviews.keys())
-        item_texts = [self.item_reviews[item_id] for item_id in item_ids]
         
-        for i in range(0, len(item_texts), batch_size):
-            batch_texts = item_texts[i:i+batch_size]
+        # 分别提取基本信息和描述
+        basic_infos = [self.item_reviews[item_id][0] for item_id in item_ids]
+        descriptions = [self.item_reviews[item_id][1] for item_id in item_ids]
+        
+        # 处理基本信息
+        basic_embeddings = self._process_text_batch(basic_infos, item_ids, batch_size)
+        
+        # 处理描述
+        desc_embeddings = self._process_text_batch(descriptions, item_ids, batch_size)
+        
+        # 合并嵌入
+        for item_id in item_ids:
+            basic_emb = basic_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
+            desc_emb = desc_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
+            
+            # 如果描述为空，只使用基本信息的嵌入
+            if np.allclose(desc_emb, 0):
+                item_embeddings[item_id] = basic_emb
+            else:
+                # 平均
+                item_embeddings[item_id] = (basic_emb + desc_emb) / 2.0
+        
+        return item_embeddings
+    def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
+        """
+        Process a batch of texts and return embeddings.
+        
+        Args:
+            texts: List of texts to process
+            item_ids: Corresponding item IDs
+            batch_size: Batch size for processing
+            
+        Returns:
+            Dictionary mapping item IDs to embeddings
+        """
+        embeddings_dict = {}
+        
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i+batch_size]
             batch_ids = item_ids[i:i+batch_size]
+            
+            # 过滤空文本
+            valid_indices = [j for j, text in enumerate(batch_texts) if text.strip()]
+            if not valid_indices:
+                # 如果批次中所有文本都为空，使用零向量
+                for j, item_id in enumerate(batch_ids):
+                    embeddings_dict[item_id] = np.zeros(self.model_config.hidden_size)
+                continue
+            
+            valid_texts = [batch_texts[j] for j in valid_indices]
+            valid_ids = [batch_ids[j] for j in valid_indices]
             
             # Tokenize the batch
             inputs = self.text_tokenizer(
-                batch_texts, 
+                valid_texts, 
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True, 
@@ -218,12 +269,16 @@ class ItemEmbeddingDataset(Dataset):
             # Extract embeddings based on the selected strategy
             embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
             
-            # Store embeddings
-            for j, item_id in enumerate(batch_ids):
-                item_embeddings[item_id] = embeddings[j].cpu().numpy()
+            # Store embeddings for valid texts
+            for j, item_id in enumerate(valid_ids):
+                embeddings_dict[item_id] = embeddings[j].cpu().numpy()
+            
+            # 为空文本的item_id添加零向量
+            empty_indices = [j for j in range(len(batch_texts)) if j not in valid_indices]
+            for j in empty_indices:
+                embeddings_dict[batch_ids[j]] = np.zeros(self.model_config.hidden_size)
         
-        return item_embeddings
-    
+        return embeddings_dict
     def __len__(self) -> int:
         """
         Get the number of items in the dataset.
@@ -236,6 +291,34 @@ class ItemEmbeddingDataset(Dataset):
         """
         return len(self.item_ids)
     
+    # def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor, str]]:
+    #     """
+    #     Get a single item from the dataset.
+        
+    #     Args:
+    #         index: Index of the item to retrieve
+            
+    #     Returns:
+    #         Dictionary containing:
+    #             - item_id: ID of the item
+    #             - embedding: Tensor of the item's embedding
+    #             - text: Original text of the item
+    #     """
+    #     # Get item ID
+    #     item_id = self.item_ids[index]
+        
+    #     # Get item embedding and text
+    #     embedding = self.item_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
+    #     text = self.item_reviews.get(item_id, "")
+        
+    #     # Convert to tensor
+    #     embedding_tensor = torch.tensor(embedding, dtype=torch.float32)
+        
+    #     return {
+    #         "item_id": item_id,
+    #         "embedding": embedding_tensor,
+    #         "text": text
+    #     }
     def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor, str]]:
         """
         Get a single item from the dataset.
@@ -246,15 +329,20 @@ class ItemEmbeddingDataset(Dataset):
         Returns:
             Dictionary containing:
                 - item_id: ID of the item
-                - embedding: Tensor of the item's embedding
-                - text: Original text of the item
+                - embedding: Tensor of the item's averaged embedding
+                - basic_info: Basic information text
+                - description: Description text
+                - text: Combined text (for backward compatibility)
         """
         # Get item ID
         item_id = self.item_ids[index]
         
-        # Get item embedding and text
+        # Get item embedding and texts
         embedding = self.item_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
-        text = self.item_reviews.get(item_id, "")
+        basic_info, description = self.item_reviews.get(item_id, ("", ""))
+        
+        # Combined text for backward compatibility
+        combined_text = f"{basic_info} Description: {description}" if description else basic_info
         
         # Convert to tensor
         embedding_tensor = torch.tensor(embedding, dtype=torch.float32)
@@ -262,9 +350,11 @@ class ItemEmbeddingDataset(Dataset):
         return {
             "item_id": item_id,
             "embedding": embedding_tensor,
-            "text": text
+            "basic_info": basic_info,
+            "description": description,
+            "text": combined_text
         }
-    
+
     def get_embedding_by_id(self, item_id: int) -> Optional[torch.Tensor]:
         """
         Get the embedding for a specific item ID.
@@ -280,7 +370,7 @@ class ItemEmbeddingDataset(Dataset):
         else:
             raise KeyError(f"Item ID {item_id} not found in embeddings")
     
-    def get_text_by_id(self, item_id: int) -> Optional[str]:
+    def get_text_by_id(self, item_id: int) -> Optional[Tuple[str, str]]:
         """
         Get the text for a specific item ID.
         
@@ -288,13 +378,12 @@ class ItemEmbeddingDataset(Dataset):
             item_id: ID of the item to retrieve
             
         Returns:
-            String containing the item's text, or None if not found
+            Tuple containing (basic_info, description), or None if not found
         """
         if item_id in self.item_reviews:
-            return self.item_reviews.get(item_id, None)
+            return self.item_reviews.get(item_id, ("", ""))
         else:
             raise KeyError(f"Item ID {item_id} not found in item_reviews")
-
 
 def item_collate_fn(batch: List[Dict[str, Union[int, torch.Tensor, str]]]) -> Dict[str, torch.Tensor]:
     """
