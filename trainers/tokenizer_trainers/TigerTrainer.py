@@ -5,7 +5,8 @@ import torch
 import logging
 import os
 from tqdm import tqdm
-
+import numpy as np
+from collections import Counter
 class Trainer:
     def __init__(
         self, 
@@ -25,6 +26,44 @@ class Trainer:
         os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
         self.tokenizer.to(self.device)
         self.optimizer.move_optimizer_state_to_device(self.device)
+    def _calculate_codebook_utilization(self, train_dataloader):
+        """计算每层码本的利用率"""
+        self.tokenizer.eval()
+        
+        # 存储每层的码本使用情况
+        codebook_usage = [Counter() for _ in range(self.tokenizer.n_codebooks)]
+        total_samples = 0
+        
+        with torch.no_grad():
+            for batch_idx, (item_ids, embeddings) in enumerate(train_dataloader):
+                embeddings = embeddings.to(self.device)
+                
+                # 获取量化索引
+                indices = self.tokenizer.encode(embeddings)  # shape: [batch_size, n_codebooks]
+                
+                # 统计每层码本的使用情况
+                for layer_idx in range(self.tokenizer.n_codebooks):
+                    layer_indices = indices[:, layer_idx].cpu().numpy()
+                    for idx in layer_indices:
+                        codebook_usage[layer_idx][idx] += 1
+                
+                total_samples += embeddings.size(0)
+        
+        # 计算利用率
+        utilization_rates = []
+        for layer_idx, usage in enumerate(codebook_usage):
+            used_codes = len(usage)
+            total_codes = self.tokenizer.codebook_size
+            utilization_rate = used_codes / total_codes
+            utilization_rates.append(utilization_rate)
+            
+            logging.info(f"Layer {layer_idx + 1}: {used_codes}/{total_codes} codes used, "
+                        f"utilization rate: {utilization_rate:.4f}")
+        
+        avg_utilization = np.mean(utilization_rates)
+        logging.info(f"Average codebook utilization rate: {avg_utilization:.4f}")
+        
+        return utilization_rates, avg_utilization
 
     def _train_one_epoch(self, train_dataloader, epoch: int):
         self.tokenizer.train()
@@ -74,6 +113,15 @@ class Trainer:
                 f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | "
                 f"Train Recon Loss: {train_recon:.4f} | Train Commit Loss: {train_commit:.4f}"
             )
-        
+            # 每1000个epoch输出码本利用率
+            if (epoch + 1) % 1000 == 0:
+                logging.info(f"\n=== Codebook Utilization Analysis at Epoch {epoch+1} ===")
+                utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader)
+                logging.info("=" * 60)
         torch.save(self.tokenizer.state_dict(), self.checkpoint_path)
         logging.info(f"Training complete. Final model saved to {self.checkpoint_path}")
+
+        # 最终码本利用率
+        logging.info("\n=== Final Codebook Utilization Analysis ===")
+        utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader)
+        logging.info("=" * 60)
