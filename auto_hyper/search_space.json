@@ -1,0 +1,3 @@
+{
+    "model.learning_rate": {"_type": "choice", "_value": [1e-4, 1e-3, 1e-2]}
+}

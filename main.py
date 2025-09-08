@@ -16,9 +16,12 @@ from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
 from transformers import T5ForConditionalGeneration
+from nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
 import random
 import numpy as np
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -52,13 +55,23 @@ def setup_logging(log_dir: str):
 
 def setup_output_directories(base_output_dir: str = "./output"):
     """设置输出目录结构"""
-    dirs = {
-        'base': base_output_dir,
-        'tokenizer': os.path.join(base_output_dir, 'tokenizer_model'),
-        'model': os.path.join(base_output_dir, 'generation_model'),
-        'checkpoints': os.path.join(base_output_dir, 'checkpoints'),
-        'logs': os.path.join(base_output_dir, 'logs')
-    }
+    if "NNI_PLATFORM" in os.environ:
+        nni_output_dir = os.environ["NNI_OUTPUT_DIR"]
+        dirs = {
+            'base': base_output_dir,
+            'tokenizer': os.path.join(base_output_dir, 'tokenizer_model'),
+            'model': os.path.join(base_output_dir, 'generation_model'),
+            'checkpoints': os.path.join(base_output_dir, 'checkpoints'),
+            'logs': os.path.join(nni_output_dir, 'logs')
+        } 
+    else:
+        dirs = {
+            'base': base_output_dir,
+            'tokenizer': os.path.join(base_output_dir, 'tokenizer_model'),
+            'model': os.path.join(base_output_dir, 'generation_model'),
+            'checkpoints': os.path.join(base_output_dir, 'checkpoints'),
+            'logs': os.path.join(base_output_dir, 'logs')
+        }
     
     for dir_path in dirs.values():
         os.makedirs(dir_path, exist_ok=True)
@@ -236,7 +249,11 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         )
         
         # 保存最终模型
-        trainer.save_model(output_dirs['model'])
+        if "NNI_PLATFORM" not in os.environ:
+            trainer.save_model(output_dirs['model'])
+        else:
+            report_nni_metrics(test_metrics)
+        
         if accelerator.is_main_process:
             logger.info("生成模型训练和评估完成!")
         
@@ -253,6 +270,11 @@ def main(cfg: DictConfig):
     """主函数"""
     seed = getattr(cfg, 'seed', 42) 
     set_seed(seed)
+
+    if "NNI_PLATFORM" in os.environ:
+        nni_params = get_nni_params()
+        cfg = update_config_with_nni(cfg, nni_params)
+
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
     # 设置CUDA设备

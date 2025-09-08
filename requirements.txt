@@ -8,3 +8,4 @@ tqdm==4.64.1
 transformers==4.37.0
 hydra-core
 omegaconf
+nni==2.10.1
