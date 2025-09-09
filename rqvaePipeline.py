@@ -149,10 +149,48 @@ class RQVAETrainingPipeline:
                 print("--- Proceeding with full training pipeline instead. ---")
                 self._initialize_codebooks()
                 self._train()
+                if checkpoint_path and os.path.exists(checkpoint_path):
+                    print(f"\n--- Best usage checkpoint found at '{checkpoint_path}'. ---")
+                    try:
+                        device = self.config.get('device', 'cpu')
+                        original_state_dict = torch.load(checkpoint_path, map_location=device)
+                        new_state_dict = {}
+                        prefix = 'rq_vae.'
+                        for key, value in original_state_dict.items():
+                            if key.startswith(prefix):
+                                new_key = key[len(prefix):]
+                                new_state_dict[new_key] = value
+                            else:
+                                new_state_dict[key] = value
+                        self.tokenizer.rq_vae.load_state_dict(new_state_dict)
+                        self.tokenizer.rq_vae.to(device)
+                        print("--- Best usage model loaded successfully. ---")
+                    except Exception as e:
+                        print(f"--- Error loading checkpoint: {e} ---")
         else:
             print("\n--- No checkpoint found. Proceeding with full training. ---")
             self._initialize_codebooks()
             self._train()
+            if checkpoint_path and os.path.exists(checkpoint_path):
+                print(f"\n--- Best usage checkpoint found at '{checkpoint_path}'. ---")
+                try:
+                    device = self.config.get('device', 'cpu')
+                    original_state_dict = torch.load(checkpoint_path, map_location=device)
+                    new_state_dict = {}
+                    prefix = 'rq_vae.'
+                    for key, value in original_state_dict.items():
+                        if key.startswith(prefix):
+                            new_key = key[len(prefix):]
+                            new_state_dict[new_key] = value
+                        else:
+                            new_state_dict[key] = value
+                    self.tokenizer.rq_vae.load_state_dict(new_state_dict)
+                    self.tokenizer.rq_vae.to(device)
+                    print("--- Best usage model loaded successfully. ---")
+                except Exception as e:
+                    print(f"--- Error loading checkpoint: {e} ---")
+        
+
         # self._initialize_codebooks()
         # self._train()
         self._finalize_and_verify()

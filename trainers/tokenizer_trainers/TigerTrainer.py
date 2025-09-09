@@ -122,7 +122,7 @@ class Trainer:
         else:
             # 普通checkpoint包含epoch和利用率信息
             base_path, ext = os.path.splitext(self.checkpoint_path)
-            checkpoint_filename = f"{base_path}_epoch{epoch+1}_util{avg_utilization:.4f}{ext}"
+            checkpoint_filename = f"{base_path}_epoch{epoch+1}{ext}"
             torch.save(self.tokenizer.state_dict(), checkpoint_filename)
             logging.info(f"Checkpoint saved to {checkpoint_filename}")
             return checkpoint_filename
@@ -146,7 +146,7 @@ class Trainer:
                 utilization_rates, avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=False)
                 self._save_checkpoint(epoch, avg_utilization)
 
-                if avg_utilization > self.best_utilization:
+                if avg_utilization >= self.best_utilization:
                     self.best_utilization = avg_utilization
                     self.best_epoch = epoch
                     self._save_checkpoint(epoch, avg_utilization, is_best=True)
