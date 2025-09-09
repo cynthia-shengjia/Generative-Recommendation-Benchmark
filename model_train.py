@@ -349,11 +349,8 @@ def evaluate_model_with_constrained_beam_search(
     candidate_trie = Trie(tokenizer.item2tokens)
     prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
     
-    # 初始化指标累计器
-    metrics = {f'hit@{k}': 0 for k in k_list}
-    metrics.update({f'ndcg@{k}': 0 for k in k_list})
-    total_samples = 0
-    
+    all_predictions = []
+    all_labels = []
     # 获取设备
     device = accelerator.device
     
@@ -392,12 +389,13 @@ def evaluate_model_with_constrained_beam_search(
             batch_size = input_ids.size(0)
             generated_ids_reshaped = generated_ids.view(batch_size, num_beams, -1)[:, :, 1:]
             probabilities_reshaped = torch.exp(sequences_scores).view(batch_size, num_beams)
+            
+            batch_predictions = []
+            batch_labels = []
             # 处理每个样本
             for i in range(batch_size):
-                # 获取当前样本的真实物品ID
                 true_item_id = true_item_ids[i]
-                
-                # 获取当前样本的所有生成序列和概率
+                batch_labels.append(true_item_id)
                 user_sequences = generated_ids_reshaped[i]
                 user_probs = probabilities_reshaped[i]
                 
@@ -419,74 +417,43 @@ def evaluate_model_with_constrained_beam_search(
                 # 去重并保持顺序
                 seen = set()
                 item_ids = [x for x in item_ids if not (x in seen or seen.add(x))]
-                
-                # 计算每个K值的指标
-                for k in k_list:
-                    # 取前k个推荐物品
-                    top_k_items = item_ids[:k]
-                    
-                    # 计算Hit@K
-                    hit = 1 if true_item_id in top_k_items else 0
-                    metrics[f'hit@{k}'] += hit
-                    
-                    # 计算NDCG@K
-                    if hit:
-                        rank = top_k_items.index(true_item_id) + 1
-                        ndcg = 1 / math.log2(rank + 1)
-                    else:
-                        ndcg = 0
-                    metrics[f'ndcg@{k}'] += ndcg
-                
-                total_samples += 1
-            
-            # 更新进度条
-            if accelerator.is_main_process and total_samples > 0:
-                current_metrics = {}
-                for k in k_list:
-                    current_metrics[f"hit@{k}"] = metrics[f"hit@{k}"] / total_samples
-                progress_bar.set_postfix(current_metrics)
-    metrics_tensor = torch.tensor([
-        total_samples,
-        *[metrics[f'hit@{k}'] for k in k_list],
-        *[metrics[f'ndcg@{k}'] for k in k_list]
-    ], dtype=torch.float32, device=device)
-    
-    gathered_metrics = accelerator.gather(metrics_tensor)
-    
+                batch_predictions.append(item_ids)
+            gathered_predictions = accelerator.gather_for_metrics(batch_predictions)
+            gathered_labels = accelerator.gather_for_metrics(batch_labels)
+
+            all_predictions.extend(gathered_predictions)
+            all_labels.extend(gathered_labels)
+
     if accelerator.is_main_process:
-        # 添加调试信息
-        logger.info(f"Original metrics_tensor shape: {metrics_tensor.shape}")
-        logger.info(f"Gathered metrics shape: {gathered_metrics.shape}")
-        logger.info(f"Gathered metrics dim: {gathered_metrics.dim()}")
-        logger.info(f"Number of processes: {accelerator.num_processes}")
-        
-        # gather flatten了所有进程结果
-        num_processes = accelerator.num_processes
-        metrics_per_process = len(metrics_tensor)
-        gathered_metrics = gathered_metrics.view(num_processes, metrics_per_process)
-        
-        total_gathered_samples = gathered_metrics[:, 0].sum().item()
-        
-        aggregated_metrics = {}
-        idx = 1
-        for k in k_list:
-            aggregated_metrics[f'hit@{k}'] = gathered_metrics[:, idx].sum().item() / total_gathered_samples if total_gathered_samples > 0 else 0
-            idx += 1
-        for k in k_list:
-            aggregated_metrics[f'ndcg@{k}'] = gathered_metrics[:, idx].sum().item() / total_gathered_samples if total_gathered_samples > 0 else 0
-            idx += 1
-        
-        if logger:
-            logger.info(f"\n{mode}结果:")
+        metrics = {f'hit@{k}': 0 for k in k_list}
+        metrics.update({f'ndcg@{k}': 0 for k in k_list})
+        total_samples = len(all_labels)
+
+        # 在所有收集到的数据上进行计算
+        for true_item_id, predicted_items in zip(all_labels, all_predictions):
             for k in k_list:
-                logger.info(f"Hit@{k}: {aggregated_metrics[f'hit@{k}']:.4f}, NDCG@{k}: {aggregated_metrics[f'ndcg@{k}']:.4f}")
-            logger.info(f"总有效样本数: {int(total_gathered_samples)}")
+                top_k_items = predicted_items[:k]
+                
+                hit = 1 if true_item_id in top_k_items else 0
+                metrics[f'hit@{k}'] += hit
+                
+                if hit:
+                    rank = top_k_items.index(true_item_id) + 1
+                    ndcg = 1 / math.log2(rank + 1)
+                    metrics[f'ndcg@{k}'] += ndcg
         
-        return aggregated_metrics
-    else:
-        return {f'hit@{k}': 0 for k in k_list} | {f'ndcg@{k}': 0 for k in k_list}
-    
-    # # 计算平均指标
+        # 计算平均指标
+        final_metrics = {}
+        for key, value in metrics.items():
+            final_metrics[key] = value / total_samples
+
+        if logger:
+            logger.info(f"\n{mode} 结果 (共 {total_samples} 个样本):")
+            for k in k_list:
+                logger.info(f"Hit@{k}: {final_metrics[f'hit@{k}']:.4f}, NDCG@{k}: {final_metrics[f'ndcg@{k}']:.4f}")
+        
+        return final_metrics 
+    # # # 计算平均指标
     # if total_samples > 0:
     #     for k in k_list:
     #         metrics[f'hit@{k}'] /= total_samples

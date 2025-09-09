@@ -109,6 +109,7 @@ class ItemEmbeddingDataset(Dataset):
     def _load_item_reviews(self) -> Dict[int, Tuple[str, str]]:
         """
         Load item reviews from the text data file, splitting into basic info and description.
+        Handles empty string values gracefully.
         
         Args:
             None
@@ -122,15 +123,72 @@ class ItemEmbeddingDataset(Dataset):
             item_titles_dataframe = pickle.load(f)
         
         for _, row in item_titles_dataframe.iterrows():
-            item_id = int(row['ItemID'])
-            # 基本信息部分（不包含描述）
-            basic_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
-            # 描述部分
-            description = str(row['Description']) if row['Description'] else ""
-            
-            item_reviews[item_id] = (basic_info, description)
+            try:
+                item_id = int(row['ItemID'])
+                
+                def safe_get_field(field_name: str, default: str = "Unknown") -> str:
+                    """安全获取字段值，处理空字符串情况"""
+                    value = row.get(field_name, "")
+                    return default if value == "" else str(value).strip()
+                
+                # 获取各个字段
+                title = safe_get_field('Title', 'Unknown')
+                categories = safe_get_field('Categories', 'Unknown')
+                brand = safe_get_field('Brand', 'Unknown')
+                description = safe_get_field('Description', '')  # 描述为空时设为空字符串，不是"Unknown"
+                
+                basic_info_parts = []
+                
+                basic_info_parts.append(f"Atomic Item ID: {item_id}")
+                
+                # 只有非Unknown的字段才添加
+                if title != 'Unknown':
+                    basic_info_parts.append(f"Title: {title}")
+                
+                if categories != 'Unknown':
+                    basic_info_parts.append(f"Categories: {categories}")
+                
+                if brand != 'Unknown':
+                    basic_info_parts.append(f"Brand: {brand}")
+                
+                basic_info = ", ".join(basic_info_parts)
+                
+                item_reviews[item_id] = (basic_info, description)
+                
+            except (ValueError, KeyError, TypeError) as e:
+                print(f"Warning: Error processing row: {e}")
+                continue
         
+        print(f"Successfully loaded {len(item_reviews)} items")
         return item_reviews
+
+
+
+    # def _load_item_reviews(self) -> Dict[int, Tuple[str, str]]:
+    #     """
+    #     Load item reviews from the text data file, splitting into basic info and description.
+        
+    #     Args:
+    #         None
+            
+    #     Returns:
+    #         Dictionary mapping item IDs to tuple of (basic_info, description)
+    #     """
+    #     item_reviews = defaultdict(lambda: ("", ""))
+        
+    #     with open(self.data_text_files, 'rb') as f:
+    #         item_titles_dataframe = pickle.load(f)
+        
+    #     for _, row in item_titles_dataframe.iterrows():
+    #         item_id = int(row['ItemID'])
+    #         # 基本信息部分（不包含描述）
+    #         basic_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
+    #         # 描述部分
+    #         description = str(row['Description']) if row['Description'] else ""
+            
+    #         item_reviews[item_id] = (basic_info, description)
+        
+    #     return item_reviews
     
     def _extract_embeddings(
         self, 
@@ -183,11 +241,11 @@ class ItemEmbeddingDataset(Dataset):
         
         else:
             raise ValueError(f"Unknown embedding strategy: {self.embedding_strategy}")
-    
     def _transform_semantic_embeddings(self) -> Dict[int, np.ndarray]:
         """
         Transform item texts to embeddings using the specified model.
         Process basic info and description separately, then average them.
+        Only process descriptions that are not empty.
         
         Args:
             None
@@ -205,28 +263,38 @@ class ItemEmbeddingDataset(Dataset):
         basic_infos = [self.item_reviews[item_id][0] for item_id in item_ids]
         descriptions = [self.item_reviews[item_id][1] for item_id in item_ids]
         
-        # 处理基本信息
+        print("Processing basic info embeddings...")
         basic_embeddings = self._process_text_batch(basic_infos, item_ids, batch_size)
         
-        # 处理描述
+        print("Processing description embeddings...")
+        # 只处理非空描述
+        
         desc_embeddings = self._process_text_batch(descriptions, item_ids, batch_size)
         
         # 合并嵌入
         for item_id in item_ids:
-            basic_emb = basic_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
-            desc_emb = desc_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
+            basic_emb = basic_embeddings.get(item_id)
+            desc_emb = desc_embeddings.get(item_id)
             
-            # 如果描述为空，只使用基本信息的嵌入
-            if np.allclose(desc_emb, 0):
-                item_embeddings[item_id] = basic_emb
-            else:
-                # 平均
+            if basic_emb is None:
+                basic_emb = np.zeros(self.model_config.hidden_size)
+                
+            if False:
                 item_embeddings[item_id] = (basic_emb + desc_emb) / 2.0
+            else:
+                item_embeddings[item_id] = basic_emb
+        
+        num_with_desc = len([item_id for item_id in item_ids if desc_embeddings.get(item_id) is not None])
+        print(f"Final embeddings generated for {len(item_embeddings)} items")
+        print(f"Items with descriptions: {num_with_desc}")
+        print(f"Items without descriptions: {len(item_embeddings) - num_with_desc}")
         
         return item_embeddings
+
     def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
         """
         Process a batch of texts and return embeddings.
+        Only processes non-empty texts and returns None for empty texts.
         
         Args:
             texts: List of texts to process
@@ -234,28 +302,33 @@ class ItemEmbeddingDataset(Dataset):
             batch_size: Batch size for processing
             
         Returns:
-            Dictionary mapping item IDs to embeddings
+            Dictionary mapping item IDs to embeddings (only for non-empty texts)
         """
         embeddings_dict = {}
         
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i+batch_size]
-            batch_ids = item_ids[i:i+batch_size]
-            
-            # 过滤空文本
-            valid_indices = [j for j, text in enumerate(batch_texts) if text.strip()]
-            if not valid_indices:
-                # 如果批次中所有文本都为空，使用零向量
-                for j, item_id in enumerate(batch_ids):
-                    embeddings_dict[item_id] = np.zeros(self.model_config.hidden_size)
-                continue
-            
-            valid_texts = [batch_texts[j] for j in valid_indices]
-            valid_ids = [batch_ids[j] for j in valid_indices]
+        # 预先过滤空文本，保留原始索引
+        valid_pairs = []
+        for i, (text, item_id) in enumerate(zip(texts, item_ids)):
+            if text and text.strip():  # 只处理非空文本
+                valid_pairs.append((text, item_id))
+        
+        if not valid_pairs:
+            print("Warning: No valid texts to process")
+            return embeddings_dict  # 返回空字典
+        
+        valid_texts, valid_ids = zip(*valid_pairs)
+        valid_texts = list(valid_texts)
+        valid_ids = list(valid_ids)
+        
+        print(f"Processing {len(valid_texts)} valid texts out of {len(texts)} total texts...")
+        
+        for i in range(0, len(valid_texts), batch_size):
+            batch_texts = valid_texts[i:i+batch_size]
+            batch_ids = valid_ids[i:i+batch_size]
             
             # Tokenize the batch
             inputs = self.text_tokenizer(
-                valid_texts, 
+                batch_texts, 
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True, 
@@ -269,14 +342,9 @@ class ItemEmbeddingDataset(Dataset):
             # Extract embeddings based on the selected strategy
             embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
             
-            # Store embeddings for valid texts
-            for j, item_id in enumerate(valid_ids):
+            # Store embeddings (只存储有效文本的embedding)
+            for j, item_id in enumerate(batch_ids):
                 embeddings_dict[item_id] = embeddings[j].cpu().numpy()
-            
-            # 为空文本的item_id添加零向量
-            empty_indices = [j for j in range(len(batch_texts)) if j not in valid_indices]
-            for j in empty_indices:
-                embeddings_dict[batch_ids[j]] = np.zeros(self.model_config.hidden_size)
         
         return embeddings_dict
     def __len__(self) -> int:
