@@ -14,16 +14,91 @@ from typing import List, Dict, Any
 import math
 import logging
 import re
-from transformers import T5ForConditionalGeneration,T5Config
+from transformers import T5ForConditionalGeneration,T5Config,Trainer
+import numpy as np
+import math
+from transformers import EvalPrediction
 
+def compute_metrics(p: EvalPrediction, tokens_to_item_map: dict, k_list: List[int] = [1, 5, 10]) -> Dict[str, float]:
+    """
+    计算评估指标的函数，用于 Hugging Face Trainer。
+    这个函数假设 p.predictions 是模型生成的结果，p.label_ids 是真实标签。
 
+    参数:
+        p (EvalPrediction): 包含 predictions 和 label_ids 的对象。
+                            - predictions: (num_samples, num_beams, seq_len) 的 numpy 数组，是生成的 token ID。
+                            - label_ids: (num_samples,) 的 numpy 数组，是真实的 item ID。
+        k_list (List[int]): 需要计算指标的 K 值列表。
 
+    返回:
+        Dict[str, float]: 包含所有指标的字典。
+    """
+    # p.predictions 的形状是 (batch_size, num_beams, max_gen_length)
+    # p.label_ids 的形状是 (batch_size, 1) 或 (batch_size,)
+
+    batch_size = p.predictions.shape[0]
+    num_beams = p.predictions.shape[1]
+
+    generated_ids = p.predictions
+    # generated_ids 是我们通过自定义 Trainer 传过来的生成结果
+    generated_ids_tensor = torch.from_numpy(p.predictions)
+    generated_ids_reshaped = generated_ids_tensor.view(batch_size, num_beams, -1)[:, :, 1:]
+    
+    all_predictions = []
+    all_labels = []
+    for label_group in p.label_ids:
+        token_ids_for_lookup = label_group[:-1]
+        
+        true_item_id = tokens_to_item_id(
+            token_ids_for_lookup.tolist(),
+            tokens_to_item_map
+        )
+        
+        all_labels.append(true_item_id)
+    for i in range(batch_size):
+        user_sequences = generated_ids_reshaped[i] # (num_beams, max_gen_length)
+        
+        # beam search 的结果已经按分数排好序，
+        item_ids = []
+        for seq in user_sequences:
+            item_id = tokens_to_item_id(
+                seq.tolist(),
+                tokens_to_item_map
+            )
+            item_ids.append(item_id)
+        
+        # 去重并保持顺序
+        seen = set()
+        unique_item_ids = [x for x in item_ids if x is not None and not (x in seen or seen.add(x))]
+        all_predictions.append(unique_item_ids)
+
+    metrics = {f'hit@{k}': 0.0 for k in k_list}
+    metrics.update({f'ndcg@{k}': 0.0 for k in k_list})
+    total_samples = len(all_labels)
+
+    for true_item_id, predicted_items in zip(all_labels, all_predictions):
+        for k in k_list:
+            top_k_items = predicted_items[:k]
+            
+            hit = 1 if true_item_id in top_k_items else 0
+            metrics[f'hit@{k}'] += hit
+            
+            if hit:
+                rank = top_k_items.index(true_item_id) + 1
+                metrics[f'ndcg@{k}'] += 1 / math.log2(rank + 1)
+
+    # 计算平均指标
+    final_metrics = {}
+    for key, value in metrics.items():
+        final_metrics[key] = value / total_samples
+    return final_metrics
 def create_t5_model(vocab_size: int, model_config: dict) -> T5ForConditionalGeneration:
     """
     创建标准的T5模型，根据提供的配置参数
     """
     config = T5Config(
         vocab_size=vocab_size,
+        d_model = model_config['d_model'],  # 计算 d_model
         d_kv=model_config['d_kv'],
         d_ff=model_config['d_ff'],
         num_layers=model_config['num_layers'],
@@ -171,147 +246,6 @@ def train_model(
     return accelerator.unwrap_model(model)
 
 
-def test_model(
-    model: CustomT5ForConditionalGeneration,
-    test_dataloader: torch.utils.data.DataLoader,
-    accelerator: Accelerator,
-    tokenizer: TigerTokenizer,
-    k_list: List[int] = [1, 5, 10],
-    num_beams: int = 10,
-    max_gen_length: int = 5,  # 生成序列的最大长度
-    logger: logging.Logger = None
-) -> Dict[str, float]:
-    """
-    测试模型并计算NDCG@K和Hit@K指标
-    
-    参数:
-        model: 已训练的模型
-        test_dataloader: 测试数据加载器
-        accelerator: Accelerator实例
-        tokenizer: 分词器，包含tokens2item和item2tokens映射
-        k_list: 要计算的K值列表
-        num_beams: beam search的beam数量
-        max_gen_length: 生成序列的最大长度
-        logger: 日志记录器
-    
-    返回:
-        包含各项指标的字典
-    """
-    model.eval()
-    
-    # 初始化Trie结构和约束函数
-    tokens_to_item_map = tokenizer.tokens2item
-    candidate_trie = Trie(tokenizer.item2tokens)
-    prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
-    
-    # 初始化指标累计器
-    metrics = {f'hit@{k}': 0 for k in k_list}
-    metrics.update({f'ndcg@{k}': 0 for k in k_list})
-    total_samples = 0
-    
-    # 获取设备
-    device = accelerator.device
-    
-    with torch.no_grad():
-        progress_bar = tqdm(test_dataloader, desc="Testing", disable=not accelerator.is_main_process)
-        
-        for batch_idx, batch in enumerate(progress_bar):
-            # 将数据移动到设备
-            encoder_input_ids = batch['encoder_input_ids'].to(device)
-            encoder_attention_mask = batch['encoder_attention_mask'].to(device)
-            
-            # 获取真实物品ID
-            true_item_ids = batch['label_id'].tolist()
-            # 使用beam search生成序列
-            outputs = model.generate(
-                encoder_input_ids=encoder_input_ids,
-                encoder_attention_mask=encoder_attention_mask,
-                max_length=max_gen_length,
-                num_beams=num_beams,
-                num_return_sequences=num_beams,
-                early_stopping=True,
-                decoder_start_token_id=0,
-                output_scores=True,
-                return_dict_in_generate=True,
-                prefix_allowed_tokens_fn=prefix_allowed_fn  # 使用Trie约束
-            )
-            
-            # 获取生成的序列和分数
-            generated_ids = outputs.sequences
-            sequences_scores = outputs.sequences_scores
-            
-            # 重塑结果以便按样本分组
-            batch_size = encoder_input_ids.size(0)
-            generated_ids_reshaped = generated_ids.view(batch_size, num_beams, -1)[:, :, 1:]
-            probabilities_reshaped = torch.exp(sequences_scores).view(batch_size, num_beams)
-            
-            # 处理每个样本
-            for i in range(batch_size):
-                # 获取当前样本的真实物品ID
-                true_item_id = true_item_ids[i]
-                
-                # 获取当前样本的所有生成序列和概率
-                user_sequences = generated_ids_reshaped[i]
-                user_probs = probabilities_reshaped[i]
-                
-                # 按概率从高到低排序
-                sorted_indices = torch.argsort(user_probs, descending=True)
-                sorted_sequences = user_sequences[sorted_indices]
-                
-                # 将tokens转换为item ID
-                item_ids = []
-                for seq in sorted_sequences:
-                    item_id = tokens_to_item_id(seq, tokens_to_item_map)
-                    item_ids.append(item_id)
-                
-                
-                # 计算每个K值的指标
-                for k in k_list:
-                    # 取前k个推荐物品
-                    top_k_items = item_ids[:k]
-                    
-                    # 计算Hit@K
-                    hit = 1 if true_item_id in top_k_items else 0
-                    metrics[f'hit@{k}'] += hit
-                    
-                    # 计算NDCG@K
-                    if hit:
-                        rank = top_k_items.index(true_item_id) + 1
-                        ndcg = 1 / math.log2(rank + 1)
-                    else:
-                        ndcg = 0
-                    metrics[f'ndcg@{k}'] += ndcg
-                
-                total_samples += 1
-            
-            # 更新进度条
-            if accelerator.is_main_process and total_samples > 0:
-                current_metrics = {}
-                for k in k_list:
-                    current_metrics[f"hit@{k}"] = metrics[f"hit@{k}"] / total_samples
-                progress_bar.set_postfix(current_metrics)
-    
-    # 计算平均指标
-    if total_samples > 0:
-        for k in k_list:
-            metrics[f'hit@{k}'] /= total_samples
-            metrics[f'ndcg@{k}'] /= total_samples
-    else:
-        # 如果没有有效样本，设置默认值
-        for k in k_list:
-            metrics[f'hit@{k}'] = 0
-            metrics[f'ndcg@{k}'] = 0
-    
-    # 打印结果
-    if accelerator.is_main_process and logger:
-        logger.info("\n测试结果:")
-        for k in k_list:
-            logger.info(f"Hit@{k}: {metrics[f'hit@{k}']:.4f}, NDCG@{k}: {metrics[f'ndcg@{k}']:.4f}")
-        logger.info(f"总有效样本数: {total_samples}")
-    
-    return metrics
-
-
 
 
 def evaluate_model_with_constrained_beam_search(
@@ -453,6 +387,69 @@ def evaluate_model_with_constrained_beam_search(
                 logger.info(f"Hit@{k}: {final_metrics[f'hit@{k}']:.4f}, NDCG@{k}: {final_metrics[f'ndcg@{k}']:.4f}")
         
         return final_metrics 
+    
+
+class GenerativeTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        self.generation_params = kwargs.pop('generation_params', {})
+        self.item2tokens = kwargs.pop('item2tokens', None) # 传入tokenizer以便构建Trie
+        self.pad_token_id = kwargs.pop('pad_token_id', 0)
+        self.eos_token_id = kwargs.pop('eos_token_id', 1)
+        super().__init__(*args, **kwargs)
+        if self.item2tokens:
+            self.candidate_trie = Trie(self.item2tokens)
+            self.prefix_allowed_fn = prefix_allowed_tokens_fn(self.candidate_trie)
+        else:
+            self.prefix_allowed_fn = None
+            print("警告: 未提供 tokenizer_for_gen 或 tokenizer.item2tokens，无法使用前缀约束。")
+
+
+    def prediction_step(
+        self,
+        model: torch.nn.Module,
+        inputs: Dict[str, torch.Tensor],
+        prediction_loss_only: bool,
+        ignore_keys: List[str] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        重写 prediction_step 以执行生成操作。
+        """
+        # 如果是训练过程中的评估，则计算损失
+        has_labels = "labels" in inputs
+        inputs = self._prepare_inputs(inputs)
+
+        # 1. 计算常规损失
+        with torch.no_grad():
+            if has_labels:
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                loss = loss.mean().detach()
+            else:
+                loss = None
+
+        # 2. 执行生成操作
+        gen_kwargs = {
+            # 对于T5，max_length 是指 decoder 生成序列的最大长度
+            "max_length": self.generation_params.get('max_gen_length'), 
+            "num_beams": self.generation_params.get('num_beams'),
+            "num_return_sequences": self.generation_params.get('max_k'),
+            "early_stopping": True,
+            "pad_token_id": self.pad_token_id,
+            "eos_token_id": self.eos_token_id,
+        }
+        if self.prefix_allowed_fn:
+            gen_kwargs["prefix_allowed_tokens_fn"] = self.prefix_allowed_fn
+
+        generated_sequences = model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            **gen_kwargs,
+        )
+
+        # (batch_size * num_beams, seq_len) -> (batch_size, num_beams, seq_len)
+        batch_size = inputs["input_ids"].shape[0]
+        num_return_sequences = gen_kwargs["num_return_sequences"]
+        generated_ids_reshaped = generated_sequences.view(batch_size, num_return_sequences, -1)
+        return (loss, generated_ids_reshaped, inputs.get("labels"))
     # # # 计算平均指标
     # if total_samples > 0:
     #     for k in k_list:
