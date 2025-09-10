@@ -1,7 +1,7 @@
 # Generative-Recommendation-Benchmark
 
 ## Installation
-  
+
 To install all required dependencies, run the following command in the project root directory:
 
 ```bash
@@ -65,3 +65,13 @@ You can find and modify these parameters in the `config` directory
 - `batch_size`: Training batch size.
 - `log_interval`: Logging interval.
 - `embedding_strategy`: Embedding pooling strategy.
+
+## Experimental Results
+
+|            | Beauty                         |        | Sports                         |        | Toys and Games                 |        |
+| ---------- | ------------------------------ | ------ | ------------------------------ | ------ | ------------------------------ | ------ |
+| **Metric** | Ours                           | Paper  | Ours                           | Paper  | Ours                           | Paper  |
+| Recall@5   | 0.0327 $(\color{green}{72\%})$ | 0.0454 | 0.0208 $(\color{green}{78\%})$ | 0.0264 | 0.0346 $(\color{green}{66\%})$ | 0.0521 |
+| Recall@10  | 0.0519 $(\color{green}{80\%})$ | 0.0648 | 0.0331 $(\color{green}{82\%})$ | 0.0400 | 0.0515 $(\color{green}{72\%})$ | 0.0712 |
+| NDCG@5     | 0.0207 $(\color{green}{64\%})$ | 0.0321 | 0.0133 $(\color{green}{73\%})$ | 0.0181 | 0.0233 $(\color{green}{63\%})$ | 0.0371 |
+| NDCG@10    | 0.0270 $(\color{green}{70\%})$ | 0.0384 | 0.0173 $(\color{green}{68\%})$ | 0.0225 | 0.0278 $(\color{green}{64\%})$ | 0.0432 |
