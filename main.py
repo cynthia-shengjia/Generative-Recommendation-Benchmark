@@ -1,57 +1,27 @@
 import os
 import torch
 import json
-import argparse
-from datetime import datetime
 from torch.utils.data import DataLoader
+from datetime import datetime
 from accelerate import Accelerator
-import logging 
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from rqvaePipeline import RQVAETrainingPipeline
-from model_train import create_custom_t5_model, train_model, evaluate_model_with_constrained_beam_search
+from pipelines.tokenizer_pipeline.rqvae_pipeline import RQVAETrainingPipeline
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
-from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
 from transformers import T5ForConditionalGeneration
-from nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
+from tools.nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
+from tools.utils import set_seed, setup_logging
+from tools.train_utils import evaluate_model_with_constrained_beam_search, create_t5_model
+from tools.trainer_utils import setup_training
 import random
 import numpy as np
+from functools import partial
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-
-def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    
-def setup_logging(log_dir: str):
-    log_filename = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    log_filepath = os.path.join(log_dir, log_filename)
-
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    file_handler = logging.FileHandler(log_filepath)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    return logger
 
 def setup_output_directories(base_output_dir: str = "./output"):
     """设置输出目录结构"""
@@ -144,7 +114,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
             logger.info("创建生成模型...")
         # 创建模型
-        from model_train import create_t5_model
+        
         model = create_t5_model(
             vocab_size=tokenizer.vocab_size,
             model_config=model_config
@@ -197,38 +167,10 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         
         # 使用accelerator准备数据加载器
         test_dataloader = accelerator.prepare(test_dataloader)
-
-        # 训练参数
-        training_args = TrainingArguments(
-            output_dir=output_dirs['model'],
-            num_train_epochs=model_config['num_epochs'],
-            per_device_train_batch_size=model_config['batch_size'],
-            per_device_eval_batch_size=model_config['test_batch_size'],
-            learning_rate=model_config['learning_rate'],
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            save_total_limit=2,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            logging_dir=output_dirs['logs'],
-            logging_steps=100,
-            report_to=[],
-            ddp_find_unused_parameters=False,
-            remove_unused_columns=False,
-        )
-
-        # 创建Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=valid_dataset,
-            data_collator=train_data_collator,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=20)],
-        )
-
-        # 训练模型
+ 
+        trainer = setup_training(model, tokenizer, train_dataset, valid_dataset, 
+                                   model_config, output_dirs, train_data_collator = train_data_collator, logger = logger, use_generative=model_config.get('use_generative', False))
+ 
         trainer.train()
         accelerator.wait_for_everyone() 
 
@@ -241,9 +183,9 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             eval_dataloader=test_dataloader,
             accelerator=accelerator,
             tokenizer=tokenizer,
-            k_list=[1, 5, 10],
-            num_beams=model_config.get('num_beams', 10),
-            max_gen_length=model_config.get('max_gen_length', 5),
+            k_list=k_list,
+            num_beams=num_beams,
+            max_gen_length=max_gen_length,
             logger=logger,
             mode="Test"
         )
@@ -251,8 +193,6 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         # 保存最终模型
         if "NNI_PLATFORM" not in os.environ:
             trainer.save_model(output_dirs['model'])
-        else:
-            report_nni_metrics(test_metrics)
         
         if accelerator.is_main_process:
             logger.info("生成模型训练和评估完成!")
@@ -338,6 +278,7 @@ def main(cfg: DictConfig):
         logger.info(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*60)
     accelerator.wait_for_everyone()
+
 
 if __name__ == '__main__':
     main()
