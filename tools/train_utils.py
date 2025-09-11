@@ -22,7 +22,7 @@ from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from transformers import TrainerCallback, TrainingArguments, TrainerState
 from trainers.model_trainers.GenerativeTrainer import GenerativeTrainer
 from tools.nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
-
+from genrec.cbs_structure.generate_trie import Trie,prefix_allowed_tokens_fn
 
 def create_t5_model(vocab_size: int, model_config: dict) -> T5ForConditionalGeneration:
     """

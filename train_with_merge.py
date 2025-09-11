@@ -80,10 +80,113 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain:
         return False
 
 def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accelerator, logger, force_retrain=False):
-    """阶段2: 训练生成模型（使用约束beam search进行评估）"""
+    """阶段2: 根据验证集搜索最佳参数（使用约束beam search进行评估）"""
     if accelerator.is_main_process:
         logger.info("\n" + "="*60)
         logger.info("阶段2: 训练生成模型")
+        logger.info("="*60)
+    
+    tokenizer_items2tokens_path = os.path.join(output_dirs['tokenizer'], 'item2tokens.json')
+    if not os.path.exists(tokenizer_items2tokens_path):
+        if accelerator.is_main_process:
+            logger.info(f"错误: tokenizer未完成训练，找不到文件: {tokenizer_items2tokens_path}")
+        return False
+    tokenizer_object_path = rqvae_config['tokenizer_path']
+    if not os.path.exists(tokenizer_object_path):
+        if accelerator.is_main_process:
+            logger.info(f"错误: 找不到完整的tokenizer对象文件: {tokenizer_object_path}")
+            logger.info("请先运行阶段1进行训练。")
+        return False
+    
+    try:
+        if accelerator.is_main_process:
+            logger.info(f"正在从 {tokenizer_object_path} 加载完整的tokenizer...")
+        tokenizer = TigerTokenizer.load(tokenizer_object_path)
+        if accelerator.is_main_process:
+            logger.info(f"成功加载tokenizer，包含 {len(tokenizer.item2tokens)} 个物品的token映射")
+            logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
+            logger.info("创建生成模型...")
+        # 创建模型
+        
+        model = create_t5_model(
+            vocab_size=tokenizer.vocab_size,
+            model_config=model_config
+        )
+
+        if accelerator.is_main_process:
+            total_params = sum(p.numel() for p in model.parameters())
+            logger.info(f"模型总参数数量: {total_params:,}")
+            logger.info("创建数据集...")
+
+        # 创建数据集
+        train_dataset = SeqModelTrainingDataset(
+            data_interaction_files=model_config['data_interaction_files'],
+            data_text_files=model_config['data_text_files'],
+            tokenizer=tokenizer, config=model_config, mode='train'
+        )
+        valid_dataset = SeqModelTrainingDataset(
+            data_interaction_files=model_config['data_interaction_files'],
+            data_text_files=model_config['data_text_files'],
+            tokenizer=tokenizer, config=model_config, mode='valid'
+        )
+
+
+        # 创建数据整理器
+        train_data_collator = TrainSeqRecDataCollator(
+            max_seq_len=train_dataset.max_token_len,
+            pad_token_id=tokenizer.pad_token,
+            eos_token_id=tokenizer.eos_token,
+            tokens_per_item=train_dataset.tokens_per_item
+        )
+        
+        # 使用accelerator准备数据加载器
+ 
+        trainer = setup_training(
+            model, 
+            tokenizer, 
+            train_dataset, 
+            valid_dataset, 
+            model_config, 
+            output_dirs, 
+            train_data_collator = train_data_collator, 
+            logger = logger, 
+            use_generative=model_config.get('use_generative', False)
+        )
+ 
+        trainer.train()
+        accelerator.wait_for_everyone() 
+
+        
+        # 使用约束beam search进行测试评估
+        if accelerator.is_main_process:
+            logger.info("使用约束beam search进行测试评估...")
+        
+
+        if accelerator.is_main_process:
+            logger.info("生成模型训练和评估完成!")
+        
+        del trainer
+        del model
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return True
+
+    except Exception as e:
+        if accelerator.is_main_process:
+            logger.error(f"生成模型训练失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        return False
+
+
+def stage3_merge_train_generation_model(model_config, rqvae_config, output_dirs, accelerator, logger, force_retrain=False):
+    """阶段3: 训练生成模型（使用约束beam search进行评估）"""
+    if accelerator.is_main_process:
+        logger.info("\n" + "="*60)
+        logger.info("阶段3: 将验证集并入训练集，训练生成模型")
         logger.info("="*60)
     
     model_save_path = model_config['model_save_path']
@@ -129,7 +232,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         train_dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer, config=model_config, mode='train'
+            tokenizer=tokenizer, config=model_config, mode='merge_train'
         )
         valid_dataset = SeqModelTrainingDataset(
             data_interaction_files=model_config['data_interaction_files'],
@@ -168,8 +271,17 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         # 使用accelerator准备数据加载器
         test_dataloader = accelerator.prepare(test_dataloader)
  
-        trainer = setup_training(model, tokenizer, train_dataset, valid_dataset, 
-                                   model_config, output_dirs, train_data_collator = train_data_collator, logger = logger, use_generative=model_config.get('use_generative', False))
+        trainer = setup_training(
+            model, 
+            tokenizer, 
+            train_dataset, 
+            valid_dataset, 
+            model_config, 
+            output_dirs, 
+            train_data_collator = train_data_collator, 
+            logger = logger, 
+            use_generative=False
+        )
  
         trainer.train()
         accelerator.wait_for_everyone() 
@@ -183,9 +295,9 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             eval_dataloader=test_dataloader,
             accelerator=accelerator,
             tokenizer=tokenizer,
-            k_list=k_list,
-            num_beams=num_beams,
-            max_gen_length=max_gen_length,
+            k_list=model_config.get("k_list", []),
+            num_beams=model_config.get("num_beams", 10),
+            max_gen_length=model_config.get("max_gen_length", 5),
             logger=logger,
             mode="Test"
         )
@@ -205,6 +317,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             traceback.print_exc()
         return False
 
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
     """主函数"""
@@ -214,6 +327,8 @@ def main(cfg: DictConfig):
     if "NNI_PLATFORM" in os.environ:
         nni_params = get_nni_params()
         cfg = update_config_with_nni(cfg, nni_params)
+
+
 
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
@@ -268,6 +383,25 @@ def main(cfg: DictConfig):
     elif cfg.skip_model and accelerator.is_main_process:
         logger.info("跳过生成模型训练阶段")
     
+
+
+    if not cfg.skip_merge_train and success:
+        # 获取模型配置
+        model_config = OmegaConf.to_container(cfg.model, resolve=True)
+        model_config['device'] = device
+        model_config['dataset_name'] = cfg.dataset
+        model_config['model_save_path'] = os.path.join(output_dirs['model'], f"{cfg.dataset}_final_model.pt")
+        model_config['checkpoint_dir'] = output_dirs['checkpoints']
+        
+        model_success = stage3_merge_train_generation_model(
+            model_config, rqvae_config, output_dirs, accelerator,
+            force_retrain=cfg.force_retrain_model,logger=logger
+        )
+        success = success and model_success
+    elif cfg.skip_merge_train and accelerator.is_main_process:
+        logger.info("跳过融合验证集训练生成模型训练阶段")
+
+
     if accelerator.is_main_process:
         logger.info("\n" + "="*60)
         if success:
