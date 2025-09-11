@@ -8,46 +8,19 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from pipelines.tokenizer_pipeline.rqvae_pipeline import RQVAETrainingPipeline
-from trainers.model_trainers.GenerativeTrainer import GenerativeTrainer
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
-from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
 from transformers import T5ForConditionalGeneration
 from tools.nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
 from tools.utils import set_seed, setup_logging
-from tools.model_train_utils import compute_metrics,evaluate_model_with_constrained_beam_search, create_t5_model
+from tools.train_utils import evaluate_model_with_constrained_beam_search, create_t5_model
+from tools.trainer_utils import setup_training
 import random
 import numpy as np
 from functools import partial
-from transformers import TrainerCallback, TrainingArguments, TrainerState
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-class LoggingCallback(TrainerCallback):
-    """
-    一个自定义的回调函数，将 Trainer 的日志（包括训练进度和评估结果）
-    转发到指定的 logger。
-    """
-    def __init__(self, logger):
-        super().__init__()
-        self.logger = logger
-
-    def on_log(self, args: TrainingArguments, state: TrainerState, control, logs=None, **kwargs):
-        if state.is_world_process_zero and logs:
-            if any(key.startswith("eval_") for key in logs.keys()):
-                self.logger.info("***** 验证结果 *****")
-                metrics = {}
-                for key, value in logs.items():
-                    self.logger.info(f"  {key}: {value}")
-                    metrics.update({key: value})
-                if "NNI_PLATFORM" in os.environ:
-                    report_nni_metrics(metrics,1)
-            else: 
-                _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}
-                log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())
-                self.logger.info(log_str)
-
 
 
 def setup_output_directories(base_output_dir: str = "./output"):
@@ -194,54 +167,9 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         
         # 使用accelerator准备数据加载器
         test_dataloader = accelerator.prepare(test_dataloader)
-        # 训练参数
-        training_args = TrainingArguments(
-            output_dir=output_dirs['model'],
-            num_train_epochs=model_config['num_epochs'],
-            per_device_train_batch_size=model_config['batch_size'],
-            per_device_eval_batch_size=model_config['test_batch_size'],
-            learning_rate=model_config['learning_rate'],
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            save_total_limit=2,
-            load_best_model_at_end=True,
-            metric_for_best_model="ndcg@10", # 使用你的自定义指标
-            greater_is_better=True,
-            # metric_for_best_model="eval_loss",
-            # greater_is_better=False,
-            logging_dir=output_dirs['logs'],
-            logging_steps=100,
-            report_to=[],
-            ddp_find_unused_parameters=False,
-            remove_unused_columns=False,
-        )
-
-        tokens_to_item_map = tokenizer.tokens2item
-        compute_metrics_with_map = partial(compute_metrics, tokens_to_item_map=tokens_to_item_map)
-        num_beams = model_config.get('num_beams', 10)
-        max_gen_length = model_config.get('max_gen_length', 5)
-        k_list = [1,5,10]
-        max_k = k_list[-1]
-        generation_params = {
-            'max_gen_length': max_gen_length,
-            'num_beams': num_beams,
-            'max_k': max_k
-        }
-        logging_callback = LoggingCallback(logger)
-
-        trainer = GenerativeTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=valid_dataset,
-            data_collator=train_data_collator,
-            compute_metrics=compute_metrics_with_map,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=10), logging_callback],
-            generation_params=generation_params,
-            item2tokens=tokenizer.item2tokens,
-            pad_token_id=tokenizer.pad_token,
-            eos_token_id=tokenizer.eos_token
-        )
+ 
+        trainer = setup_training(model, tokenizer, train_dataset, valid_dataset, 
+                                   model_config, output_dirs, train_data_collator = train_data_collator, logger = logger, use_generative=model_config.get('use_generative', False))
  
         trainer.train()
         accelerator.wait_for_everyone() 
