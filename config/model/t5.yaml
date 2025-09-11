@@ -20,3 +20,5 @@ num_epochs: 10
 num_steps: null
 k_list: [1,5,10]
 use_generative: true
+num_beams: 10
+max_gen_length: 5
