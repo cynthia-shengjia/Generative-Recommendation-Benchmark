@@ -1,58 +1,28 @@
 import os
 import torch
 import json
-import argparse
-from datetime import datetime
 from torch.utils.data import DataLoader
+from datetime import datetime
 from accelerate import Accelerator
-import logging 
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from rqvaePipeline import RQVAETrainingPipeline
-from model_train import compute_metrics, GenerativeTrainer,evaluate_model_with_constrained_beam_search
+from trainers.model_trainers.GenerativeTrainer import GenerativeTrainer
+from model_train import compute_metrics,evaluate_model_with_constrained_beam_search
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecDataCollator
 from transformers import T5ForConditionalGeneration
-from nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
+from tools.nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
+from tools.utils import set_seed, setup_logging
 import random
 import numpy as np
 from functools import partial
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-
-def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    
-def setup_logging(log_dir: str):
-    log_filename = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    log_filepath = os.path.join(log_dir, log_filename)
-
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    file_handler = logging.FileHandler(log_filepath)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    return logger
 from transformers import TrainerCallback, TrainingArguments, TrainerState
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class LoggingCallback(TrainerCallback):
     """
@@ -271,17 +241,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             pad_token_id=tokenizer.pad_token,
             eos_token_id=tokenizer.eos_token
         )
-        # trainer = Trainer(
-        #     model=model,
-        #     args=training_args,
-        #     tokenizer=tokenizer,
-        #     train_dataset=train_dataset,
-        #     eval_dataset=valid_dataset,
-        #     data_collator=train_data_collator,
-        #     compute_metrics=compute_metrics_with_map,
-        #     callbacks=[EarlyStoppingCallback(early_stopping_patience=10)],
-        # )
-#resume_from_checkpoint
+ 
         trainer.train()
         accelerator.wait_for_everyone() 
 
