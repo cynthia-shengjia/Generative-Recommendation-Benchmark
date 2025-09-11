@@ -10,3 +10,4 @@ force_retrain_tokenizer: false
 force_retrain_model: false
 skip_tokenizer: false
 skip_model: false
+skip_merge_train: false

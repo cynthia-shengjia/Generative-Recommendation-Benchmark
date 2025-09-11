@@ -49,6 +49,10 @@ class RQVAETrainingPipeline:
         self.trainer = None
         self.dataset = None
         self.train_dataloader = None
+        self.final_model_decision = self.config.get('final_model_decision', 'save_final').lower()
+        if self.final_model_decision not in ['save_final', 'save_best']:
+            raise ValueError(f"Invalid 'final_model_decision' value: {self.final_model_decision}. "
+                             f"Must be 'save_final' or 'save_best'.")
 
     def _prepare_data(self):
         """Creates the dataset and dataloader."""
@@ -149,7 +153,7 @@ class RQVAETrainingPipeline:
                 print("--- Proceeding with full training pipeline instead. ---")
                 self._initialize_codebooks()
                 self._train()
-                if checkpoint_path and os.path.exists(checkpoint_path):
+                if checkpoint_path and os.path.exists(checkpoint_path) and self.final_model_decision == 'save_best':
                     print(f"\n--- Best usage checkpoint found at '{checkpoint_path}'. ---")
                     try:
                         device = self.config.get('device', 'cpu')
@@ -171,7 +175,7 @@ class RQVAETrainingPipeline:
             print("\n--- No checkpoint found. Proceeding with full training. ---")
             self._initialize_codebooks()
             self._train()
-            if checkpoint_path and os.path.exists(checkpoint_path):
+            if checkpoint_path and os.path.exists(checkpoint_path) and self.final_model_decision == 'save_best':
                 print(f"\n--- Best usage checkpoint found at '{checkpoint_path}'. ---")
                 try:
                     device = self.config.get('device', 'cpu')

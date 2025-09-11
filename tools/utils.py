@@ -1,5 +1,10 @@
 import json
 import torch
+import random
+import numpy as np
+from datetime import datetime
+import logging 
+import os
 # 读取JSON文件
 def load_json_file(file_path):
     with open(file_path, 'r') as f:
@@ -57,3 +62,34 @@ def calc_ndcg(rank, k):
     if rank <= k:
         return 1 / math.log2(rank + 1)
     return 0
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    
+def setup_logging(log_dir: str):
+    log_filename = f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_filepath = os.path.join(log_dir, log_filename)
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    file_handler = logging.FileHandler(log_filepath)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    return logger
