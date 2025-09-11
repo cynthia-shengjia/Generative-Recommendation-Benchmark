@@ -193,8 +193,6 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         # 保存最终模型
         if "NNI_PLATFORM" not in os.environ:
             trainer.save_model(output_dirs['model'])
-        else:
-            report_nni_metrics(test_metrics)
         
         if accelerator.is_main_process:
             logger.info("生成模型训练和评估完成!")
