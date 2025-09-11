@@ -7,9 +7,8 @@ from accelerate import Accelerator
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from rqvaePipeline import RQVAETrainingPipeline
+from pipelines.tokenizer_pipeline.rqvae_pipeline import RQVAETrainingPipeline
 from trainers.model_trainers.GenerativeTrainer import GenerativeTrainer
-from model_train import compute_metrics,evaluate_model_with_constrained_beam_search
 from genrec.datasets.model_dataset import SeqModelTrainingDataset
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
@@ -17,6 +16,7 @@ from genrec.datasets.data_collator import TrainSeqRecDataCollator,TestSeqRecData
 from transformers import T5ForConditionalGeneration
 from tools.nni_utils import get_nni_params, update_config_with_nni, report_nni_metrics
 from tools.utils import set_seed, setup_logging
+from tools.model_train_utils import compute_metrics,evaluate_model_with_constrained_beam_search, create_t5_model
 import random
 import numpy as np
 from functools import partial
@@ -141,7 +141,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
             logger.info("创建生成模型...")
         # 创建模型
-        from model_train import create_t5_model
+        
         model = create_t5_model(
             vocab_size=tokenizer.vocab_size,
             model_config=model_config
@@ -215,6 +215,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             ddp_find_unused_parameters=False,
             remove_unused_columns=False,
         )
+
         tokens_to_item_map = tokenizer.tokens2item
         compute_metrics_with_map = partial(compute_metrics, tokens_to_item_map=tokens_to_item_map)
         num_beams = model_config.get('num_beams', 10)
