@@ -43,8 +43,13 @@ def update_config_with_nni(config: DictConfig, nni_params: Dict[str, Any]) -> Di
 def report_nni_metrics(metrics: Dict[str, float], step: int = None):
     """向NNI报告指标"""
     try:
-        metrics.update({"default": metrics["hit@5"]})
-        nni.report_final_result(metrics)
+        if step is not None:
+            metrics.update({"default": metrics["eval_hit@5"]})
+            nni.report_intermediate_result(metrics)
+        else:
+            metrics.update({"default": metrics["hit@5"]})
+            nni.report_final_result(metrics)
+
         # # 将指标报告给NNI
         # for metric_name, metric_value in metrics.items():
         #     # NNI需要将指标作为中间结果或最终结果报告

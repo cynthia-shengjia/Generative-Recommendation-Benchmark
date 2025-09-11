@@ -53,6 +53,7 @@ def setup_logging(log_dir: str):
     logger.addHandler(console_handler)
     return logger
 from transformers import TrainerCallback, TrainingArguments, TrainerState
+
 class LoggingCallback(TrainerCallback):
     """
     一个自定义的回调函数，将 Trainer 的日志（包括训练进度和评估结果）
@@ -66,12 +67,19 @@ class LoggingCallback(TrainerCallback):
         if state.is_world_process_zero and logs:
             if any(key.startswith("eval_") for key in logs.keys()):
                 self.logger.info("***** 验证结果 *****")
+                metrics = {}
                 for key, value in logs.items():
                     self.logger.info(f"  {key}: {value}")
+                    metrics.update({key: value})
+                if "NNI_PLATFORM" in os.environ:
+                    report_nni_metrics(metrics,1)
             else: 
                 _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}
                 log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())
                 self.logger.info(log_str)
+
+
+
 def setup_output_directories(base_output_dir: str = "./output"):
     """设置输出目录结构"""
     if "NNI_PLATFORM" in os.environ:
