@@ -85,6 +85,19 @@ class SeqModelTrainingDataset(Dataset):
                         'history_items': history,
                         'target_item': target
                     })
+            elif self.mode == 'merge_train':
+                # 训练集需要截断倒数的两个item (倒数第二个item作为valid，倒数第一个item作为test)
+                item_seq = item_seq[:-1]
+                for i in range(1, len(item_seq)):
+                    history = item_seq[:i]
+                    target = item_seq[i]
+                    if len(history) > max_item_seq_len:
+                        history = history[-max_item_seq_len:]
+                    samples.append({
+                        'user_id': user_id,
+                        'history_items': history,
+                        'target_item': target
+                    })
             elif self.mode == 'valid':
                 # 验证集：使用倒数第二个物品作为目标
                 if len(item_seq) < 3:
