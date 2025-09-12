@@ -34,6 +34,8 @@ from fbgemm_replacement import (
     jagged_to_padded_dense_py,
     dense_to_jagged_py,
 )
+from hstu_utils import HSTUSeqModelTrainingDataset, HSTUDataCollator,EmbeddingModule, LocalEmbeddingModule,LearnablePositionalEmbeddingInputFeaturesPreprocessor,LayerNormEmbeddingPostprocessor,L2NormEmbeddingPostprocessor
+
 from transformers.modeling_outputs import Seq2SeqLMOutput
 import einops
 import logging
@@ -43,6 +45,7 @@ from utils import (
     InputFeaturesPreprocessorModule,
     OutputPostprocessorModule
 )
+from transformers import PreTrainedModel,PretrainedConfig
 # from generative_recommenders.modeling.sequential.utils import get_current_embeddings
 # from generative_recommenders.modeling.similarity_module import (
 #     GeneralizedInteractionModule,
@@ -872,57 +875,182 @@ class HSTUDecoder(nn.Module):
         
         return hidden_states
 
+class HSTUConfig(PretrainedConfig):
+    model_type = "hstu"
 
-class HSTUEncoderDecoderModel(nn.Module):
-    """
-    The complete Encoder-Decoder model.
-    """
-    def __init__(self, encoder: HSTU, decoder: HSTUDecoder, num_items: int, config): # 最好传入一个config对象
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        self.config = config
-        self.lm_head = nn.Linear(self.encoder._embedding_dim, num_items, bias=False)
+    def __init__(
+        self,
+        vocab_size=36,
+        num_items=36,
+        max_sequence_len=10,
+        max_output_len=10,
+        embedding_dim=32,
+        num_blocks=2,
+        num_heads=4,
+        linear_dim=64,
+        attention_dim=8,
+        attn_dropout_rate=0.1,
+        linear_dropout_rate=0.1,
+        user_embedding_norm='l2_norm',
+        normalization='rel_bias',
+        linear_config='uvqk',
+        linear_activation='silu',
+        decoder_start_token_id=0,
+        pad_token_id=0,
+        # ... 您可能有的任何其他参数 ...
+        **kwargs
+    ):
+        super().__init__(pad_token_id=pad_token_id, decoder_start_token_id=decoder_start_token_id, **kwargs)
+        
+        self.vocab_size = vocab_size
+        self.num_items = num_items # 保持和您代码一致
+        self.max_seq_len = max_sequence_len # 注意，您代码中也叫 max_seq_len
+        self.max_output_len = max_output_len
+        self.embedding_dim = embedding_dim
+        self.num_blocks = num_blocks
+        self.num_heads = num_heads
+        self.linear_dim = linear_dim
+        self.attention_dim = attention_dim
+        self.attn_dropout_rate = attn_dropout_rate
+        self.linear_dropout_rate = linear_dropout_rate
+        self.user_embedding_norm = user_embedding_norm
+        self.normalization = normalization
+        self.linear_config = linear_config
+        self.linear_activation = linear_activation
+
+class HSTUEncoderDecoderModel(PreTrainedModel):
+    config_class = HSTUConfig
+    def __init__(self, config: HSTUConfig):
+        super().__init__(config)
+        shared_embedding_module = LocalEmbeddingModule(
+            config.vocab_size, 
+            config.embedding_dim
+        )
+        
+        input_preprocessor = LearnablePositionalEmbeddingInputFeaturesPreprocessor(
+            max_sequence_len=config.max_seq_len,
+            embedding_dim=config.embedding_dim,
+            dropout_rate=config.attn_dropout_rate,
+        )
+        
+        output_postprocessor = (
+            L2NormEmbeddingPostprocessor(
+                embedding_dim=config.embedding_dim,
+                eps=1e-6,
+            )
+            if config.user_embedding_norm == "l2_norm"
+            else LayerNormEmbeddingPostprocessor(
+                embedding_dim=config.embedding_dim,
+                eps=1e-6,
+            )
+        )
+
+        # 2. 初始化 Encoder
+        hstu_encoder = HSTU(
+            max_sequence_len=config.max_seq_len,
+            max_output_len=config.max_output_len,
+            embedding_dim=config.embedding_dim,
+            num_blocks=config.num_blocks,
+            num_heads=config.num_heads,
+            linear_dim=config.linear_dim,
+            attention_dim=config.attention_dim,
+            embedding_module=shared_embedding_module, # 使用共享模块
+            input_features_preproc_module=input_preprocessor,
+            output_postproc_module=output_postprocessor,
+            normalization=config.normalization,
+            linear_config=config.linear_config,
+            linear_activation=config.linear_activation,
+            linear_dropout_rate=config.linear_dropout_rate,
+            attn_dropout_rate=config.attn_dropout_rate,
+        )
+
+        # 3. 初始化 Decoder
+        hstu_decoder = HSTUDecoder(
+            config=config.to_dict(), # HSTUDecoder 接收的是 dict
+            embedding_module=shared_embedding_module # 使用同一个共享模块
+        )
+        
+        self.encoder = hstu_encoder
+        self.decoder = hstu_decoder
+        self.lm_head = nn.Linear(config.embedding_dim, config.num_items, bias=False)
+
+        self.lm_head.weight = self.decoder._embedding_module._item_emb.weight
+        self._tied_weights_keys = [
+            "encoder._embedding_module._item_emb.weight", 
+            "decoder._embedding_module._item_emb.weight", 
+            "lm_head.weight"
+        ]
+        self.post_init()
+
+    def _shift_right(self, input_ids):
+        """Shifts input ids one token to the right."""
+        shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+        shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
+        
+        if self.config.decoder_start_token_id is None:
+            raise ValueError("config.decoder_start_token_id has to be defined.")
+            
+        shifted_input_ids[:, 0] = self.config.decoder_start_token_id
+
+        if self.config.pad_token_id is None:
+            raise ValueError("config.pad_token_id has to be defined.")
+            
+        shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.config.pad_token_id)
+
+        return shifted_input_ids
+    def get_input_embeddings(self) -> nn.Module:
+        """
+        返回模型的输入 embedding 层。
+        """
+        return self.encoder._embedding_module._item_emb
+
+    def get_output_embeddings(self) -> nn.Module:
+        """
+        返回模型的输出 embedding/logits 层。
+        """
+        return self.lm_head
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        decoder_input_ids: torch.Tensor,
+        decoder_input_ids: Optional[torch.Tensor] = None,
         decoder_attention_mask: Optional[torch.Tensor] = None,
-        past_payloads: Optional[Dict[str, torch.Tensor]] = None, # 保持你的特殊输入，但设为可选
+        past_payloads: Optional[Dict[str, torch.Tensor]] = None,
         labels: Optional[torch.Tensor] = None,
         return_dict: Optional[bool] = None,
     ):
         return_dict = return_dict if return_dict is not None else True
+        
+        # ===================================================================
+        # 新增逻辑：如果提供了 labels，则自动创建 decoder_input_ids
+        # ===================================================================
+        if labels is not None:
+            if decoder_input_ids is None:
+                decoder_input_ids = self._shift_right(labels)
+        # ===================================================================
+
         past_ids = input_ids
-        
-        # past_lengths 可以从 attention_mask 计算得到
         past_lengths = attention_mask.sum(dim=1)
-        
-        # past_embeddings 需要从 input_ids 通过 embedding 层获得
         past_embeddings = self.encoder._embedding_module.get_item_embeddings(past_ids)
         
-        # 确保 past_payloads 是正确准备和传入的。这通常需要在自定义的 DataCollator 中完成。
         if past_payloads is None:
-            # 若未传入时间戳，创建一个全零的时间戳张量
             past_payloads = {
                 "timestamps": torch.zeros_like(input_ids, dtype=torch.long)
             }
 
-        # 1. Encode the source sequence
+        # 1. Encode
         encoder_hidden_states = self.encoder(
             past_lengths=past_lengths,
             past_ids=past_ids,
             past_embeddings=past_embeddings,
             past_payloads=past_payloads,
-            # encoder_attention_mask 传递给 decoder 的 cross-attention
         )
 
-        # 2. Decode using encoder's output
+        # 2. Decode
         decoder_outputs = self.decoder(
             decoder_input_ids=decoder_input_ids,
             encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=attention_mask, # 使用原始的 attention_mask
+            encoder_attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask
         )
 
@@ -932,13 +1060,9 @@ class HSTUEncoderDecoderModel(nn.Module):
         loss = None
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
-            # logits (batch_size, sequence_length, vocab_size)
-            # labels (batch_size, sequence_length)
+            # 注意：CrossEntropyLoss 会自动忽略 target 为 -100 的位置
             loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-        # ===================================================================
-        # 3. 返回符合 Trainer 期望的输出
-        # ===================================================================
         if not return_dict:
             output = (logits,) + (decoder_outputs,)
             return ((loss,) + output) if loss is not None else output
@@ -946,11 +1070,106 @@ class HSTUEncoderDecoderModel(nn.Module):
         return Seq2SeqLMOutput(
             loss=loss,
             logits=logits,
-            # past_key_values=... # 如果支持，用于加速生成
+            # past_key_values=...
             # decoder_hidden_states=...
             # encoder_last_hidden_state=encoder_hidden_states,
             # encoder_hidden_states=...
         )
+
+# class HSTUEncoderDecoderModel(nn.Module):
+#     """
+#     The complete Encoder-Decoder model.
+#     """
+#     def __init__(self, encoder: HSTU, decoder: HSTUDecoder, num_items: int, config):
+#         super().__init__()
+#         self.encoder = encoder
+#         self.decoder = decoder
+#         self.config = config # config 需要包含 decoder_start_token_id 和 pad_token_id
+#         self.lm_head = nn.Linear(self.encoder._embedding_dim, num_items, bias=False)
+
+#     def _shift_right(self, input_ids):
+#         """Shifts input ids one token to the right."""
+#         shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+#         shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
+        
+#         if self.config['decoder_start_token_id'] is None:
+#             raise ValueError("config['decoder_start_token_id'] has to be defined.")
+            
+#         shifted_input_ids[:, 0] = self.config['decoder_start_token_id']
+
+#         if self.config['pad_token_id'] is None:
+#             raise ValueError("config['pad_token_id'] has to be defined.")
+            
+#         shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.config['pad_token_id'])
+
+#         return shifted_input_ids
+
+#     def forward(
+#         self,
+#         input_ids: torch.Tensor,
+#         attention_mask: torch.Tensor,
+#         decoder_input_ids: Optional[torch.Tensor] = None,
+#         decoder_attention_mask: Optional[torch.Tensor] = None,
+#         past_payloads: Optional[Dict[str, torch.Tensor]] = None,
+#         labels: Optional[torch.Tensor] = None,
+#         return_dict: Optional[bool] = None,
+#     ):
+#         return_dict = return_dict if return_dict is not None else True
+        
+#         # ===================================================================
+#         # 新增逻辑：如果提供了 labels，则自动创建 decoder_input_ids
+#         # ===================================================================
+#         if labels is not None:
+#             if decoder_input_ids is None:
+#                 decoder_input_ids = self._shift_right(labels)
+#         # ===================================================================
+
+#         past_ids = input_ids
+#         past_lengths = attention_mask.sum(dim=1)
+#         past_embeddings = self.encoder._embedding_module.get_item_embeddings(past_ids)
+        
+#         if past_payloads is None:
+#             past_payloads = {
+#                 "timestamps": torch.zeros_like(input_ids, dtype=torch.long)
+#             }
+
+#         # 1. Encode
+#         encoder_hidden_states = self.encoder(
+#             past_lengths=past_lengths,
+#             past_ids=past_ids,
+#             past_embeddings=past_embeddings,
+#             past_payloads=past_payloads,
+#         )
+
+#         # 2. Decode
+#         decoder_outputs = self.decoder(
+#             decoder_input_ids=decoder_input_ids,
+#             encoder_hidden_states=encoder_hidden_states,
+#             encoder_attention_mask=attention_mask,
+#             decoder_attention_mask=decoder_attention_mask
+#         )
+
+#         # 3. Get logits
+#         logits = self.lm_head(decoder_outputs)
+
+#         loss = None
+#         if labels is not None:
+#             loss_fct = nn.CrossEntropyLoss()
+#             # 注意：CrossEntropyLoss 会自动忽略 target 为 -100 的位置
+#             loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+
+#         if not return_dict:
+#             output = (logits,) + (decoder_outputs,)
+#             return ((loss,) + output) if loss is not None else output
+
+#         return Seq2SeqLMOutput(
+#             loss=loss,
+#             logits=logits,
+#             # past_key_values=...
+#             # decoder_hidden_states=...
+#             # encoder_last_hidden_state=encoder_hidden_states,
+#             # encoder_hidden_states=...
+#         )
     # def forward(
     #     self,
     #     past_lengths: torch.Tensor,

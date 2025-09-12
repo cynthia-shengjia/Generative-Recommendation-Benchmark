@@ -153,43 +153,21 @@ class HSTUSeqModelTrainingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    # CHANGED: 此函数现在返回的数据中包含了 source_timestamps
     def __getitem__(self, index: int) -> Dict[str, Union[int, List[int]]]:
+        """
+        返回一个独立的、未经处理的样本。
+        将所有 tokenization, padding, 和 batching 逻辑留给 Data Collator。
+        """
         sample = self.samples[index]
-        history_items = sample['history_items']
-        history_timestamps = sample['history_timestamps'] # NEW: 获取历史时间戳
-        target_item = sample['target_item']
-        user_id = sample['user_id']
         
-        source_tokens = []
-        source_timestamps = [] # NEW: 用于存储与 source_tokens 对齐的时间戳
-
-        # 将历史物品转换为token序列，并同步处理时间戳
-        for item, timestamp in zip(history_items, history_timestamps):
-            num_tokens_for_item = self.tokens_per_item
-            if item in self.tokenizer.item2tokens:
-                tokens = self.tokenizer.item2tokens[item]
-                source_tokens.extend(tokens)
-                num_tokens_for_item = len(tokens)
-            else:
-                source_tokens.extend([0] * self.tokens_per_item)
-
-            # NEW: 为该物品的每个 token 复制其时间戳
-            source_timestamps.extend([timestamp] * num_tokens_for_item)
-        
-        # 将目标物品转换为token序列
-        if target_item in self.tokenizer.item2tokens:
-            target_tokens = self.tokenizer.item2tokens[target_item]
-        else:
-            target_tokens = [0] * self.tokens_per_item
-        
+        # 直接返回原始数据，DataCollator 会处理剩下的事情
         return {
-            'user_token': self.tokenizer.get_user_token(user_id),
-            'source_tokens': source_tokens,
-            'source_timestamps': source_timestamps, # NEW: 返回给 DataCollator
-            'target_tokens': target_tokens,
-            "target_id": target_item
+            'user_id': sample['user_id'],
+            'history_items': sample['history_items'],
+            'history_timestamps': sample['history_timestamps'],
+            'target_item': sample['target_item']
         }
+
     
 
 @dataclass
@@ -214,56 +192,62 @@ class HSTUDataCollator:
     - `source_timestamps`: A list of integers representing timestamps for the item history.
     - `target_tokens`: A list of integers representing the items to predict.
     """
+    tokenizer: Any # 传入你的 tokenizer 实例
     max_seq_len: int
-    pad_token_id: int
-    eos_token_id: int
     # tokens_per_item: int = 4 # This seems not used in your T5 collator, so I removed it.
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        
         input_ids_list = []
-        timestamps_list = [] # 新增：用于存储处理过的时间戳
+        timestamps_list = []
         labels_list = []
+        
+        pad_token_id = self.tokenizer.pad_token_id
+        eos_token_id = self.tokenizer.eos_token_id
+        tokens_per_item = self._get_tokens_per_item()
 
         for feature in features:
-            # --- 1. Encoder 输入处理 (input_ids 和 timestamps) ---
-            user_token = feature['user_token']
-            source_tokens = feature["source_tokens"]
-            # 假设 feature 中包含与 source_tokens 对齐的时间戳
-            source_timestamps = feature["source_timestamps"]
-
-            # 确保 token 和 timestamp 长度一致
-            if len(source_tokens) != len(source_timestamps):
-                raise ValueError("source_tokens and source_timestamps must have the same length.")
-
-            # 添加 user_token，并为 user_token 添加一个占位时间戳 (例如 0)
-            transformed_source = [user_token] + source_tokens
-            transformed_timestamps = [0] + source_timestamps # 时间戳列表也进行同样的操作
-
-            # 对 source 和 timestamps 应用同样的截断或左填充逻辑
-            if len(transformed_source) > self.max_seq_len:
-                transformed_source = transformed_source[-self.max_seq_len:]
-                transformed_timestamps = transformed_timestamps[-self.max_seq_len:]
-            else:
-                padding_length = self.max_seq_len - len(transformed_source)
-                # Token 使用 pad_token_id 填充
-                transformed_source = [self.pad_token_id] * padding_length + transformed_source
-                # Timestamps 使用 0 填充
-                transformed_timestamps = [0] * padding_length + transformed_timestamps
+            # --- 1. Encoder 输入处理 ---
+            history_items = feature["history_items"]
+            history_timestamps = feature["history_timestamps"]
             
-            input_ids_list.append(transformed_source)
-            timestamps_list.append(transformed_timestamps)
+            # 将 item_id 转换为 token_id 序列
+            source_tokens = []
+            source_aligned_timestamps = []
+            for item, timestamp in zip(history_items, history_timestamps):
+                if item in self.tokenizer.item2tokens:
+                    item_tokens = self.tokenizer.item2tokens[item]
+                    source_tokens.extend(item_tokens)
+                    source_aligned_timestamps.extend([timestamp] * len(item_tokens))
+                else:
+                    source_tokens.extend([pad_token_id] * tokens_per_item)
+                    source_aligned_timestamps.extend([0] * tokens_per_item)
+            
+            # 截断或左填充
+            if len(source_tokens) > self.max_seq_len:
+                final_tokens = source_tokens[-self.max_seq_len:]
+                final_timestamps = source_aligned_timestamps[-self.max_seq_len:]
+            else:
+                padding_len = self.max_seq_len - len(source_tokens)
+                final_tokens = [pad_token_id] * padding_len + source_tokens
+                final_timestamps = [0] * padding_len + source_aligned_timestamps
 
-            # --- 2. Decoder 输入处理 (labels) ---
-            target_tokens = feature["target_tokens"]
-            # T5 风格的目标处理
-            transformed_target = target_tokens + [self.eos_token_id]
-            labels_list.append(transformed_target)
+            input_ids_list.append(final_tokens)
+            timestamps_list.append(final_timestamps)
+
+            # --- 2. Decoder/Labels 输入处理 ---
+            target_item = feature["target_item"]
+            if target_item in self.tokenizer.item2tokens:
+                target_tokens = self.tokenizer.item2tokens[target_item]
+            else:
+                target_tokens = [pad_token_id] * tokens_per_item
+            
+            # 添加 EOS token
+            labels = target_tokens + [eos_token_id]
+            labels_list.append(labels)
 
         # --- 3. 对 Labels 进行批处理填充 ---
-        # 找到批次中最长的标签序列
         max_label_len = max(len(lbl) for lbl in labels_list)
-        
-        # 对每个标签序列进行右填充，填充值为 -100
         padded_labels_list = []
         for lbl in labels_list:
             padding_needed = max_label_len - len(lbl)
@@ -271,22 +255,24 @@ class HSTUDataCollator:
 
         # --- 4. 转换为 Tensor 并打包返回 ---
         input_ids = torch.tensor(input_ids_list, dtype=torch.long)
-        attention_mask = (input_ids != self.pad_token_id).long()
+        attention_mask = (input_ids != pad_token_id).long()
         labels = torch.tensor(padded_labels_list, dtype=torch.long)
         timestamps = torch.tensor(timestamps_list, dtype=torch.long)
-
-        # 请注意：Hugging Face Trainer 会自动从 labels 创建 decoder_input_ids
-        # 所以我们不需要在这里手动创建。
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
-            # 将时间戳打包到 HSTU 模型期望的 past_payloads 字典中
             "past_payloads": {
                 "timestamps": timestamps
             }
         }
+
+    def _get_tokens_per_item(self) -> int:
+        if not hasattr(self.tokenizer, 'item2tokens') or not self.tokenizer.item2tokens:
+            return 1
+        first_item = next(iter(self.tokenizer.item2tokens.keys()))
+        return len(self.tokenizer.item2tokens[first_item])
     
 def truncated_normal(x: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     with torch.no_grad():
