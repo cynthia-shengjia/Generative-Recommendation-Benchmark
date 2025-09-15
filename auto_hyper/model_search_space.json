@@ -2,5 +2,7 @@
     "model.learning_rate": {"_type": "choice", "_value": [1e-4,5e-4,1e-3,5e-3]},
     "model.dropout_rate": {"_type": "choice", "_value": [0, 0.1, 0.2]},
     "model.batch_size": {"_type": "choice", "_value": [256,512]},
-    "model.weight_decay": {"_type": "choice", "_value": [1e-1,1e-2,1e-3,1e-4]}
+    "model.weight_decay": {"_type": "choice", "_value": [1e-1,1e-2,1e-3,1e-4]},
+    "model.num_epochs": {"_type": "choice", "_value": [100]},
+    "output_dir": {"_type": "choice", "_value": ["Your-Tokenizer-Path"]}
 }

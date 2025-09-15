@@ -4,7 +4,7 @@ max_trial_number: 100
 
 searchSpaceFile: tokenizer_search_space.json
 
-trialCommand: python onlyRQVAE.py dataset="Toys and Games" output_dir="./output"  tokenizer.learning_rate=0.1 tokenizer.epochs=20000  
+trialCommand: python onlyRQVAE.py dataset="Toys and Games" output_dir="./output"  tokenizer.learning_rate=0.1 tokenizer.epochs=20000  tokenizer.final_model_decision="save_final"
 
 trialCodeDirectory: ..
 
@@ -21,4 +21,4 @@ trainingService:
   platform: local
   maxTrialNumberPerGpu: 1
   useActiveGpu: true
-  gpuIndices: [2,3,6,7]
+  gpuIndices: [0,2,3,7]
