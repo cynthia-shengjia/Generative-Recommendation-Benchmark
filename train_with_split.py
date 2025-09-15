@@ -192,9 +192,9 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             eval_dataloader=test_dataloader,
             accelerator=accelerator,
             tokenizer=tokenizer,
-            k_list=k_list,
-            num_beams=num_beams,
-            max_gen_length=max_gen_length,
+            k_list=model_config.get("k_list", []),
+            num_beams=model_config.get("num_beams", 10),
+            max_gen_length=model_config.get("max_gen_length", 5),
             logger=logger,
             mode="Test"
         )
