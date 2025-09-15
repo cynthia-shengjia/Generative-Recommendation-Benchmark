@@ -196,6 +196,7 @@ def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config,
         per_device_train_batch_size=model_config['batch_size'],
         per_device_eval_batch_size=model_config['test_batch_size'],
         learning_rate=model_config['learning_rate'],
+        weight_decay=model_config["weight_decay"],
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=2,
@@ -227,11 +228,11 @@ def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config,
             'max_k': max_k
         }
         
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=10), LoggingCallback(logger)]
+        callbacks = [EarlyStoppingCallback(early_stopping_patience=model_config.get("early_stop_upper_steps", 1000)), LoggingCallback(logger)]
     else:
         training_args.metric_for_best_model = "eval_loss"
         training_args.greater_is_better = False
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=20)]
+        callbacks = [EarlyStoppingCallback(early_stopping_patience=model_config.get("early_stop_upper_steps", 1000))]
         compute_metrics_with_map = None
         generation_params = None
     
