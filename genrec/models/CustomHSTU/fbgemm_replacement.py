@@ -18,6 +18,9 @@ def asynchronous_complete_cumsum_py(lengths: torch.Tensor) -> torch.Tensor:
     return torch.cat([zero, torch.cumsum(lengths, dim=0, dtype=torch.int64)])
 
 
+# ==============================================================================
+# ======================== 优化的版本 =========================================
+# ==============================================================================
 def jagged_to_padded_dense_py(
     values: torch.Tensor,
     offsets: List[torch.Tensor],
@@ -25,45 +28,40 @@ def jagged_to_padded_dense_py(
     padding_value: float = 0.0,
 ) -> torch.Tensor:
     """
-    功能等价于 torch.ops.fbgemm.jagged_to_padded_dense
-    将 Jagged Tensor (values + offsets) 转换为填充后的 Dense Tensor。
-    
-    Args:
-        values (torch.Tensor): 包含所有序列数据的1D或2D张量 (sum_lengths, dim)。
-        offsets (List[torch.Tensor]): 包含偏移量张量的列表，我们只处理第一个。
-        max_lengths (List[int]): 包含最大长度的列表，我们只处理第一个。
-        padding_value (float): 用于填充的值。
-
-    Returns:
-        torch.Tensor: 填充后的2D或3D张量 (batch_size, max_length, dim)。
+    jagged_to_padded_dense 的向量化、高性能 PyTorch 实现。
     """
     offset_tensor = offsets[0]
     max_length = max_lengths[0]
-    
     batch_size = len(offset_tensor) - 1
+
     if batch_size == 0:
-        # 处理空批次的情况
         shape = (0, max_length)
         if values.dim() > 1:
             shape = (0, max_length, values.size(1))
         return torch.empty(shape, dtype=values.dtype, device=values.device)
 
-    # 创建一个填满 padding_value 的目标张量
+    # 1. 创建一个填满 padding_value 的目标张量 (与原版相同)
     shape = (batch_size, max_length)
     if values.dim() > 1:
-        # 如果 values 是 (N, D)，输出就是 (B, L, D)
         shape = (batch_size, max_length, values.size(1))
-
     padded_dense = torch.full(shape, padding_value, dtype=values.dtype, device=values.device)
+    
+    # 2. 计算每个序列的真实长度
+    # lengths 形如 [len_1, len_2, ...]
+    lengths = offset_tensor[1:] - offset_tensor[:-1]
 
-    # 循环遍历每个序列并填充到目标张量中
-    for i in range(batch_size):
-        start = offset_tensor[i]
-        end = offset_tensor[i+1]
-        length = end - start
-        if length > 0:
-            padded_dense[i, :length] = values[start:end]
-            
+    # 3. 创建一个布尔掩码 (boolean mask) 来标识所有有效元素的位置
+    # torch.arange(max_length) -> [0, 1, 2, ..., max_length-1]
+    # lengths.unsqueeze(1) -> [[len_1], [len_2], ...]
+    # 通过广播机制，mask 是一个 (batch_size, max_length) 的布尔张量
+    # 对于第 i 行，前 lengths[i] 个元素为 True，其余为 False
+    mask = torch.arange(max_length, device=values.device) < lengths.unsqueeze(1)
+    
+    # 4. 使用掩码直接进行赋值 (一次性、并行的操作)
+    # padded_dense[mask] 会返回一个扁平化的一维视图，其元素数量正好等于 values 的数量
+    # 然后我们将 values 的所有元素一次性地“填充”到这些为 True 的位置
+    padded_dense[mask] = values
+    
     return padded_dense
 
 
@@ -72,39 +70,26 @@ def dense_to_jagged_py(
     offsets: List[torch.Tensor]
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
     """
-    功能等价于 torch.ops.fbgemm.dense_to_jagged
-    将填充后的 Dense Tensor 转换为 Jagged Tensor (values)。
-    
-    Args:
-        dense (torch.Tensor): 填充后的2D或3D张量 (batch_size, max_length, ...)。
-        offsets (List[torch.Tensor]): 包含偏移量张量的列表，我们只处理第一个。
-
-    Returns:
-        Tuple[torch.Tensor, List[torch.Tensor]]: 返回 values 张量和原始的 offsets 列表。
+    dense_to_jagged 的向量化、高性能 PyTorch 实现。
     """
     offset_tensor = offsets[0]
     batch_size = len(offset_tensor) - 1
-    
+    max_length = dense.size(1)
+
     if batch_size == 0:
         shape = (0,)
         if dense.dim() > 2:
             shape = (0, dense.size(2))
         return (torch.empty(shape, dtype=dense.dtype, device=dense.device), offsets)
 
-    sequences = []
-    for i in range(batch_size):
-        length = offset_tensor[i+1] - offset_tensor[i]
-        if length > 0:
-            sequences.append(dense[i, :length])
+    # 1. 同样，计算每个序列的真实长度
+    lengths = offset_tensor[1:] - offset_tensor[:-1]
 
-    # 如果所有序列长度都为0，则返回一个空的 values 张量
-    if not sequences:
-        shape = (0,)
-        if dense.dim() > 2:
-            shape = (0, dense.size(2))
-        return (torch.empty(shape, dtype=dense.dtype, device=dense.device), offsets)
-        
-    values = torch.cat(sequences, dim=0)
+    # 2. 创建与上面完全相同的布尔掩码
+    mask = torch.arange(max_length, device=dense.device) < lengths.unsqueeze(1)
+
+    # 3. 使用掩码直接从 dense 张量中选取所有有效元素
+    # dense[mask] 会返回一个 (total_valid_elements, dim) 的张量，这正是我们想要的 values
+    values = dense[mask]
     
-    # fbgemm 操作返回一个元组，第一个元素是 values
     return (values, offsets)
