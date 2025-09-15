@@ -99,6 +99,26 @@ def compute_metrics(p: EvalPrediction, tokens_to_item_map: dict, k_list: List[in
     return final_metrics
 
 
+
+# 自定义回调函数来控制评估频率
+class EvaluateEveryNEpochsCallback(TrainerCallback):
+    def __init__(self, n_epochs=5):
+        self.n_epochs = n_epochs
+        self.last_eval_epoch = -1
+    
+    def on_epoch_end(self, args, state, control, **kwargs):
+        # 每隔n_epochs开启评估，否则关闭
+        if (state.epoch ) % self.n_epochs == 0:
+            control.should_evaluate = True
+            self.last_eval_epoch = state.epoch
+        else:
+            control.should_evaluate = False
+            
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        # 仅在评估时保存检查点
+        control.should_save = state.epoch == self.last_eval_epoch
+
+
 class LoggingCallback(TrainerCallback):
     """
     一个自定义的回调函数，将 Trainer 的日志（包括训练进度和评估结果）
@@ -228,7 +248,11 @@ def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config,
             'max_k': max_k
         }
         
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=model_config.get("early_stop_upper_steps", 1000)), LoggingCallback(logger)]
+        callbacks = [
+            EarlyStoppingCallback(early_stopping_patience=model_config.get("early_stop_upper_steps", 1000)), 
+            LoggingCallback(logger), 
+            EvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5))
+        ]
     else:
         training_args.metric_for_best_model = "eval_loss"
         training_args.greater_is_better = False
