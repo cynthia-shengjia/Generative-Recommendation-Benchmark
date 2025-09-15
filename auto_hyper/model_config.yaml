@@ -4,12 +4,12 @@ max_trial_number: 100
 
 searchSpaceFile: search_space.json
 
-trialCommand: python main.py dataset="Toys and Games" output_dir="/home/zsj/models/TEST" model.batch_size=256 model.learning_rate=0.001 model.num_epochs=1
+trialCommand: python main.py dataset="Toys and Games" output_dir="/home/zsj/pretrained-models/RQ-VAE-bs-1024-lr-0.001-dropout-0" model.batch_size=256 model.learning_rate=0.001 model.num_epochs=50
 
 trialCodeDirectory: ..
 
 trialGpuNumber: 1       # 每块 GPU 上多少个实验
-trial_concurrency: 3    # 多少个实验一起跑
+trial_concurrency: 4    # 多少个实验一起跑
 
 
 tuner:
@@ -21,4 +21,4 @@ trainingService:
   platform: local
   maxTrialNumberPerGpu: 1
   useActiveGpu: true
-  gpuIndices: [7,0,2]
+  gpuIndices: [0,1,2,3]

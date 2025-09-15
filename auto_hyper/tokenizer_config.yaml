@@ -1,0 +1,24 @@
+# nnictl create --config ./auto_hyper/tokenizer_config.yaml --port 8070
+experimentName: Your_Experiment_Name
+max_trial_number: 100
+
+searchSpaceFile: tokenizer_search_space.json
+
+trialCommand: python onlyRQVAE.py dataset="Toys and Games" output_dir="./output"  tokenizer.learning_rate=0.1 tokenizer.epochs=20000  
+
+trialCodeDirectory: ..
+
+trialGpuNumber: 1       # 每块 GPU 上多少个实验
+trial_concurrency: 4    # 多少个实验一起跑
+
+
+tuner:
+  name: TPE
+  classArgs:
+    optimize_mode: maximize
+
+trainingService:
+  platform: local
+  maxTrialNumberPerGpu: 1
+  useActiveGpu: true
+  gpuIndices: [2,3,6,7]

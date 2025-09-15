@@ -22,3 +22,5 @@ k_list: [1,5,10]
 use_generative: true
 num_beams: 10
 max_gen_length: 5
+weight_decay: 0.001
+early_stop_upper_steps: 1000
