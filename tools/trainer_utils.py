@@ -137,7 +137,8 @@ class LoggingCallback(TrainerCallback):
                     self.logger.info(f"  {key}: {value}")
                     metrics.update({key: value})
                 if "NNI_PLATFORM" in os.environ:
-                    report_nni_metrics(metrics,1)
+                    is_final = state.epoch >= args.num_train_epochs
+                    report_nni_metrics(metrics,is_final)
             else: 
                 _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}
                 log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())
