@@ -145,198 +145,22 @@ class RelativeBucketedTimeAndPositionBasedBias(RelativeAttentionBiasModule):
         # r = (2 * N - 1) // 2
         # # [B, N + 1] to simplify tensor manipulations.
         # ext_timestamps = torch.cat(
-        #     [all_timestamps, all_timestamps[:, N - 1 : N]], dim=1# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# pyre-unsafe
-
-"""
-修复的HSTU实现，支持真正的Cache机制
-"""
-
-import abc
-import math
-from typing import Callable, Dict, List, Optional, Tuple, Union
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-import einops
-import logging
-
-from .hstu_utils4decoderOnly import (
-    EmbeddingModule,
-    InputFeaturesPreprocessorModule,
-    OutputPostprocessorModule,
-    get_current_embeddings,
-    GeneralizedInteractionModule,
-    NDPModule
-)
-from .fbgemm_replacement import (
-    asynchronous_complete_cumsum_py,
-    jagged_to_padded_dense_py,
-    dense_to_jagged_py,
-)
-
-TIMESTAMPS_KEY = "timestamps"
-
-def debug_print(tensor, name="tensor", step_counter=0):
-    """详细的调试打印函数"""
-    if tensor is None:
-        print(f"[DEBUG @ step {step_counter}] {name}: None")
-        return
-    tensor_cpu = tensor.detach().to('cpu', non_blocking=True)
-    print(
-        f"[DEBUG @ step {step_counter}] {name}:\n"
-        f"  - Shape: {tensor.shape}\n"
-        f"  - Dtype: {tensor.dtype}\n"
-        f"  - Device: {tensor.device}\n"
-        f"  - Stats: min={tensor_cpu.min():.4f}, max={tensor_cpu.max():.4f}, "
-        f"mean={tensor_cpu.mean():.4f}, std={tensor_cpu.std():.4f}\n"
-        f"  - Has NaN: {torch.isnan(tensor_cpu).any()}\n"
-        f"  - Has Inf: {torch.isinf(tensor_cpu).any()}"
-    )
-
-class RelativeAttentionBiasModule(torch.nn.Module):
-    @abc.abstractmethod
-    def forward(
-        self,
-        all_timestamps: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            all_timestamps: [B, N] x int64
-        Returns:
-            torch.float tensor broadcastable to [B, N, N]
-        """
-        pass
-
-class RelativePositionalBias(RelativeAttentionBiasModule):
-    def __init__(self, max_seq_len: int) -> None:
-        super().__init__()
-        self._max_seq_len: int = max_seq_len
-        self._w = torch.nn.Parameter(
-            torch.empty(2 * max_seq_len - 1).normal_(mean=0, std=0.02),
-        )
-
-    def forward(
-        self,
-        all_timestamps: torch.Tensor,
-    ) -> torch.Tensor:
-        del all_timestamps
-        n: int = self._max_seq_len
-        t = F.pad(self._w[: 2 * n - 1], [0, n]).repeat(n)
-        t = t[..., :-n].reshape(1, n, 3 * n - 2)
-        r = (2 * n - 1) // 2
-        return t[..., r:-r]
-
-class RelativeBucketedTimeAndPositionBasedBias(RelativeAttentionBiasModule):
-    """
-    修复的相对时间和位置偏置模块，支持真正的偏置计算
-    """
-    def __init__(
-        self,
-        max_seq_len: int,
-        num_buckets: int,
-        bucketization_fn: Callable[[torch.Tensor], torch.Tensor],
-    ) -> None:
-        super().__init__()
-        self._max_seq_len: int = max_seq_len
-        self._ts_w = torch.nn.Parameter(
-            torch.empty(num_buckets + 1).normal_(mean=0, std=0.02),
-        )
-        self._pos_w = torch.nn.Parameter(
-            torch.empty(2 * max_seq_len - 1).normal_(mean=0, std=0.02),
-        )
-        self._num_buckets: int = num_buckets
-        self._bucketization_fn: Callable[[torch.Tensor], torch.Tensor] = (
-            bucketization_fn
-        )
-    
-    def forward(
-        self,
-        all_timestamps: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        修复的前向传播，实际计算相对偏置而不是返回零矩阵
-        Args:
-            all_timestamps: (B, N).
-        Returns:
-            (B, N, N).
-        """
-        B = all_timestamps.size(0)
-        N = all_timestamps.size(1)
-        
-        # 如果没有时间戳，只使用位置偏置
-        if all_timestamps is None:
-            return self._compute_position_bias_only(B, N)
-        
-        # 计算位置偏置
-        pos_bias = self._compute_position_bias(N)
-        
-        # 计算时间偏置
-        time_bias = self._compute_time_bias(all_timestamps)
-        
-        return pos_bias + time_bias
-    
-    def _compute_position_bias_only(self, B: int, N: int) -> torch.Tensor:
-        """仅计算位置偏置"""
-        pos_bias = self._compute_position_bias(N)
-        return pos_bias.expand(B, -1, -1)
-    
-    def _compute_position_bias(self, N: int) -> torch.Tensor:
-        """计算位置偏置"""
-        if N > self._max_seq_len:
-            # 如果序列长度超过最大长度，截断或填充
-            N = min(N, self._max_seq_len)
-        
-        t = F.pad(self._pos_w[: 2 * N - 1], [0, N]).repeat(N)
-        t = t[..., :-N].reshape(1, N, 3 * N - 2)
-        r = (2 * N - 1) // 2
-        return t[..., r:-r]
-    
-    def _compute_time_bias(self, all_timestamps: torch.Tensor) -> torch.Tensor:
-        """计算时间偏置"""
-        B, N = all_timestamps.shape
-        
-        # [B, N + 1] 为了简化张量操作
-        ext_timestamps = torch.cat(
-            [all_timestamps, all_timestamps[:, N - 1 : N]], dim=1
-        )
-        
-        # 计算时间差矩阵 (B, N, N)
-        time_diffs = ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
-        
-        # 应用因果掩码
-        causal_mask = torch.tril(torch.ones(N, N, device=all_timestamps.device, dtype=torch.bool))
-        time_diffs = time_diffs * causal_mask.unsqueeze(0).float()
-        
-        # 分桶化时间差
-        bucketed_timestamps = torch.clamp(
-            self._bucketization_fn(time_diffs),
-            min=0,
-            max=self._num_buckets,
-        ).detach()
-        
-        # 查找对应的时间偏置
-        time_bias = torch.index_select(
-            self._ts_w, dim=0, index=bucketed_timestamps.view(-1)
-        ).view(B, N, N)
-        
-        return time_bias
-
+        #     [all_timestamps, all_timestamps[:, N - 1 : N]], dim=1
+        # )
+        # # causal masking. Otherwise [:, :-1] - [:, 1:] works
+        # bucketed_timestamps = torch.clamp(
+        #     self._bucketization_fn(
+        #         ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
+        #     ),
+        #     min=0,
+        #     max=self._num_buckets,
+        # ).detach()
+        # rel_pos_bias = t[:, :, r:-r]
+        # rel_ts_bias = torch.index_select(
+        #     self._ts_w, dim=0, index=bucketed_timestamps.view(-1)
+        # ).view(B, N, N)
+        # #禁用时间偏置和相对位置偏置，会不会好一些
+        # return rel_pos_bias + rel_ts_bias
 # Cache状态定义: (v, padded_q, padded_k, new_outputs)
 HSTUCacheState = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
