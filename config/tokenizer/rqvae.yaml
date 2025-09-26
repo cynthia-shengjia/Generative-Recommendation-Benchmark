@@ -1,7 +1,7 @@
 # RQ-VAE配置
-data_text_files: "./data/ToysAndGames/item2title.pkl"
-text_encoder_model: "/home/zsj/models/sentence-t5-base/sentence-t5-base"
-interaction_files: "./data/ToysAndGames/user2item.pkl"
+data_text_files: "./data/Beauty/item2title.pkl"
+text_encoder_model: "/home/lz/code/model/sentence-t5-base"
+interaction_files: "./data/Beauty/user2item.pkl"
 sent_emb_dim: 768
 n_codebooks: 3
 codebook_size: 256
@@ -20,3 +20,6 @@ log_interval: 10
 save_interval: 5000
 embedding_strategy: "mean_pooling"
 final_model_decision: "save_final"
+cf_emb_path: "none"
+cf_alpha: 0.01
+diversity_beta: 0.01

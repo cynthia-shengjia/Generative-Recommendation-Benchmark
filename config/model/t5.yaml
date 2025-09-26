@@ -1,6 +1,6 @@
 # 生成模型配置
-data_interaction_files: "./data/ToysAndGames/user2item.pkl"
-data_text_files: "./data/ToysAndGames/item2title.pkl"
+data_interaction_files: "./data/Instruments/user2item.pkl"
+data_text_files: "./data/Instruments/item2title.pkl"
 max_seq_len: 20
 padding_side: "left"
 ignored_label: -100
@@ -24,3 +24,4 @@ num_beams: 10
 max_gen_length: 5
 weight_decay: 0.001
 early_stop_upper_steps: 1000
+evaluation_epoch: 5

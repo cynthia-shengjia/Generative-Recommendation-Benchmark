@@ -3,7 +3,7 @@ defaults:
   - model: t5
   - tokenizer: rqvae
 
-dataset: "Toys and Games"
+dataset: "Instruments"
 output_dir: "/home/zsj/models/tigger-lr-1e-3"
 cuda: "0"
 force_retrain_tokenizer: false

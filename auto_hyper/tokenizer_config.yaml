@@ -1,10 +1,13 @@
 # nnictl create --config ./auto_hyper/tokenizer_config.yaml --port 8070
-experimentName: Your_Experiment_Name
+experimentName: Instruments
 max_trial_number: 100
 
 searchSpaceFile: tokenizer_search_space.json
 
-trialCommand: python onlyRQVAE.py dataset="Toys and Games" output_dir="./output"  tokenizer.learning_rate=0.1 tokenizer.epochs=20000  
+# trialCommand: python onlyRQVAE.py dataset="Instruments" output_dir="./output"  tokenizer.learning_rate=0.1 tokenizer.epochs=20000  tokenizer.final_model_decision="save_final"
+
+# train LETTER command
+trialCommand: python onlyLETTER.py dataset="Beauty" output_dir="./output"  tokenizer.cf_emb_path="/home/lz/code/Generative-Recommendation-Benchmark/cf_embs/beauty_cf_emb.pt" tokenizer.cf_alpha=0.02 tokenizer.diversity_beta=0.0001 tokenizer.learning_rate=0.1 tokenizer.epochs=20000  tokenizer.final_model_decision="save_final"
 
 trialCodeDirectory: ..
 
@@ -21,4 +24,4 @@ trainingService:
   platform: local
   maxTrialNumberPerGpu: 1
   useActiveGpu: true
-  gpuIndices: [2,3,6,7]
+  gpuIndices: [0, 1, 5, 6]
