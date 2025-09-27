@@ -17,8 +17,8 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union, Any
 
 from disrec.hstu.hstu4hf import HSTUConfig,HSTU4HF
-from genrec.datasets.model_dataset import HSTUDataset
-from genrec.datasets.data_collator import HSTUDataCollator
+from disrec.datasets.model_dataset import HSTUDataset
+from disrec.datasets.data_collator import HSTUDataCollator
 
 from transformers import TrainerCallback,EarlyStoppingCallback
 import numpy as np
