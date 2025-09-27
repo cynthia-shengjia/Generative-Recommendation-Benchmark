@@ -9,7 +9,7 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         super().__init__(config)
         self.tokenizer = tokenizer
         
-        self.commitment_beta = self.config['commitment_beta']
+        self.quant_loss_weight = self.config['quant_loss_weight']
         learning_rate = self.config['learning_rate']
         
         self.torch_optimizer = torch.optim.Adagrad(self.tokenizer.parameters(), lr=learning_rate)
@@ -21,7 +21,7 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         quantized_embeddings, _, commit_loss = tokenizer_output
         
         reconstruction_loss = F.mse_loss(quantized_embeddings, original_embeddings)
-        total_loss = reconstruction_loss + self.commitment_beta * commit_loss
+        total_loss = reconstruction_loss + self.quant_loss_weight * commit_loss
         
         return total_loss, reconstruction_loss, commit_loss
 

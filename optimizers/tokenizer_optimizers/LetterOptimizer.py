@@ -9,7 +9,7 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         super().__init__(config)
         self.tokenizer = tokenizer
         
-        self.commitment_beta = self.config['commitment_beta']
+        self.quant_loss_weight = self.config['quant_loss_weight']
         self.cf_alpha = self.config['cf_alpha']
         learning_rate = self.config['learning_rate']
         
@@ -34,7 +34,7 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         # Compute CF loss
         cf_loss = self.CF_loss(dense_quantized_embeddings, cf_embeddings)
 
-        total_loss = reconstruction_loss + self.commitment_beta * commit_loss + self.cf_alpha * cf_loss
+        total_loss = reconstruction_loss + self.quant_loss_weight * commit_loss + self.cf_alpha * cf_loss
         
         return total_loss, reconstruction_loss, commit_loss, cf_loss
 
