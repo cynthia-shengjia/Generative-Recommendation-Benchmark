@@ -110,18 +110,16 @@ class Trainer:
 
     def _train_one_epoch(self, train_dataloader, epoch: int):
         self.tokenizer.train()
-        # total_loss, total_recon_loss, total_commit_loss = 0.0, 0.0, 0.0
         total_loss, total_recon_loss, total_commit_loss, total_cf_loss = 0.0, 0.0, 0.0, 0.0
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.epochs} [Training]", leave=False)
 
-        # ====== 1. 先对 rq.vq_layers 的 embedding 做聚类，得到 labels ======
+        # 先对 rq.vq_layers 的 embedding 做聚类，得到 labels
         embs = [layer.embedding.weight.cpu().detach().numpy() for layer in self.tokenizer.rq_vae.rq.vq_layers]
         for idx, emb in enumerate(embs):
-            centers, labels = self.constrained_km(emb)  # 你需要有 self.constrained_km
+            centers, labels = self.constrained_km(emb)
             self.labels[str(idx)] = labels
 
         for batch_idx, data in enumerate(progress_bar):
-            # tag: 需要检查
             emb_idx, embeddings = data[0], data[1]
             embeddings = embeddings.to(self.device)
             self.optimizer.zero_grad()
@@ -161,9 +159,6 @@ class Trainer:
     def fit(self, train_dataloader):
         logging.info("Start Training Tokenizer...")
         for epoch in range(self.epochs):
-            # train_loss, train_recon, train_commit = self._train_one_epoch(train_dataloader, epoch)
-            # logging.info(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | "
-            #              f"Train Recon Loss: {train_recon:.4f} | Train Commit Loss: {train_commit:.4f}")
             train_loss, train_recon, train_commit, train_cf = self._train_one_epoch(train_dataloader, epoch)
             logging.info(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | "
                          f"Train Recon Loss: {train_recon:.4f} | Train Commit Loss: {train_commit:.4f} | Train CF Loss: {train_cf:.4f}")
