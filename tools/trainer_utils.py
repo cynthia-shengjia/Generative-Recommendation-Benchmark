@@ -209,13 +209,13 @@ def create_trainer(
         )
 
 # 使用示例
-def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config, output_dirs, train_data_collator, logger, use_generative=False):
+def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config, output_dirs, train_data_collator, logger, per_device_train_batch_size,per_device_eval_batch_size,use_generative=False):
     # 公共TrainingArguments配置
     training_args = TrainingArguments(
         output_dir=output_dirs['model'],
         num_train_epochs=model_config['num_epochs'],
-        per_device_train_batch_size=model_config['batch_size'],
-        per_device_eval_batch_size=model_config['test_batch_size'],
+        per_device_train_batch_size=per_device_train_batch_size,
+        per_device_eval_batch_size=per_device_eval_batch_size,
         learning_rate=model_config['learning_rate'],
         weight_decay=model_config["weight_decay"],
         eval_strategy="epoch",
