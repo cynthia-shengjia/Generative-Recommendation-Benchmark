@@ -140,7 +140,21 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         )
         
         # 使用accelerator准备数据加载器
- 
+        test_dataloader = accelerator.prepare(test_dataloader)
+        train_batch_size = model_config['batch_size']
+        test_batch_size = model_config['test_batch_size']
+        num_devices = accelerator.num_processes
+        if train_batch_size% num_devices !=0 or test_batch_size%num_devices !=0:
+            if accelerator.is_main_process:
+                logger.info(f"错误: 训练批次大小 {train_batch_size} 或测试批次大小 {test_batch_size} 不能被设备数量 {num_devices} 整除。请调整批次大小。")
+            return False
+        
+        per_device_train_batch_size = train_batch_size // num_devices
+        per_device_eval_batch_size = test_batch_size // num_devices
+        if accelerator.is_main_process:
+            logger.info(f"自动计算 Batch Size (总共 {num_devices} 个设备)")
+            logger.info(f"  - 训练: 全局 {train_batch_size} -> 单设备 {per_device_train_batch_size}")
+            logger.info(f"  - 评估: 全局 {test_batch_size} -> 单设备 {per_device_eval_batch_size}")
         trainer = setup_training(
             model, 
             tokenizer, 
@@ -150,6 +164,8 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             output_dirs, 
             train_data_collator = train_data_collator, 
             logger = logger, 
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
             use_generative=model_config.get('use_generative', False)
         )
  
@@ -270,7 +286,20 @@ def stage3_merge_train_generation_model(model_config, rqvae_config, output_dirs,
         
         # 使用accelerator准备数据加载器
         test_dataloader = accelerator.prepare(test_dataloader)
- 
+        train_batch_size = model_config['batch_size']
+        test_batch_size = model_config['test_batch_size']
+        num_devices = accelerator.num_processes
+        if train_batch_size% num_devices !=0 or test_batch_size%num_devices !=0:
+            if accelerator.is_main_process:
+                logger.info(f"错误: 训练批次大小 {train_batch_size} 或测试批次大小 {test_batch_size} 不能被设备数量 {num_devices} 整除。请调整批次大小。")
+            return False
+        
+        per_device_train_batch_size = train_batch_size // num_devices
+        per_device_eval_batch_size = test_batch_size // num_devices
+        if accelerator.is_main_process:
+            logger.info(f"自动计算 Batch Size (总共 {num_devices} 个设备)")
+            logger.info(f"  - 训练: 全局 {train_batch_size} -> 单设备 {per_device_train_batch_size}")
+            logger.info(f"  - 评估: 全局 {test_batch_size} -> 单设备 {per_device_eval_batch_size}")
         trainer = setup_training(
             model, 
             tokenizer, 
@@ -280,6 +309,8 @@ def stage3_merge_train_generation_model(model_config, rqvae_config, output_dirs,
             output_dirs, 
             train_data_collator = train_data_collator, 
             logger = logger, 
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
             use_generative=False
         )
  
