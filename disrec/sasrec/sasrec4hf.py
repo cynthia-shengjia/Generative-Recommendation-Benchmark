@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from dataclasses import dataclass
 from disrec.sasrec.sasrec import SASRecModel
+
 @dataclass
 class SASRecOutput(ModelOutput):
     """
@@ -24,14 +25,15 @@ class SASRecConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size=3000,
-        hidden_size=64,
-        num_hidden_layers=2,
-        num_attention_heads=2,
+        hidden_size=768,
+        num_hidden_layers=8,
+        num_attention_heads=6,
         hidden_dropout_prob=0.5,
         initializer_range=0.02,
         pad_token_id=0,
         norm_emb: bool = False,
-        max_seq_len = 20,
+        max_seq_len=20,
+        num_neg_samples=1,
         **kwargs
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -45,7 +47,9 @@ class SASRecConfig(PretrainedConfig):
         self.hidden_dropout_prob = hidden_dropout_prob
         self.initializer_range = initializer_range
         self.norm_emb = norm_emb
-        self.dropout_rate = hidden_dropout_prob 
+        self.dropout_rate = hidden_dropout_prob
+        self.num_neg_samples = num_neg_samples 
+
 
 class SASRec4HF(PreTrainedModel):
     config_class = SASRecConfig
@@ -57,17 +61,20 @@ class SASRec4HF(PreTrainedModel):
 
         # 创建SASRec模型
         self.SASRec = SASRecModel(config)
-        self.loss_fn = nn.CrossEntropyLoss()
+        # 修改为二元交叉熵损失函数
+        self.loss_fn = nn.BCEWithLogitsLoss()
+        self.ce_loss_fn = nn.CrossEntropyLoss()
         # 初始化权重
         self.post_init()
+
     def get_input_embeddings(self):
         return self.SASRec.item_emb
+
     def set_input_embeddings(self, value):
         self.SASRec.item_emb = value
     
     def get_output_embeddings(self):
         return self.SASRec.item_emb
-
 
     def forward(
         self,
@@ -81,7 +88,6 @@ class SASRec4HF(PreTrainedModel):
             input_ids: (batch_size, sequence_length) 输入序列
             attention_mask: (batch_size, sequence_length) 注意力掩码
             labels: (batch_size,) 或 (batch_size, sequence_length) 标签
-            return_sequence_embeddings: 是否返回完整序列嵌入
         """
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
@@ -93,6 +99,7 @@ class SASRec4HF(PreTrainedModel):
         if self.SASRec.config.norm_emb: 
             item_embeddings = F.normalize(item_embeddings, p=2, dim=-1)
             sequence_hidden_states = F.normalize(sequence_hidden_states, p=2, dim=-1)
+        
         loss = None
         if not self.training:
             last_item_indices = torch.full((batch_size,), seq_len - 1, device=device)
@@ -100,34 +107,101 @@ class SASRec4HF(PreTrainedModel):
             last_hidden_state = sequence_hidden_states.gather(
                 1, 
                 last_item_indices.view(-1, 1, 1).expand(-1, -1, self.config.hidden_size)
-            ).squeeze(1) # -> [B, D]
+            ).squeeze(1)  # -> [B, D]
             # 计算 logits: [B, D] @ [D, V] -> [B, V]
             logits = torch.matmul(last_hidden_state, item_embeddings.t())
             last_labels = labels.gather(1, last_item_indices.view(-1, 1)).squeeze(-1)
-            loss = self.compute_loss(logits, last_labels)
+            loss = self.ce_loss_fn(logits, last_labels)
+            # loss = self.compute_loss(last_hidden_state, last_labels, item_embeddings)
             if self.SASRec.config.norm_emb:
                 logits = logits / self.config.temperature
+                
         else:
             # [B, N, D] @ [D, V] -> [B, N, V]
             logits = torch.matmul(sequence_hidden_states, item_embeddings.t())
             if self.SASRec.config.norm_emb:
                 logits = logits / self.config.temperature
-            loss = self.compute_loss(logits, labels)
+            loss = self.compute_loss(sequence_hidden_states, labels, item_embeddings)
 
         return SASRecOutput(
             loss=loss,
             logits=logits,
-            # hidden_states=sequence_hidden_states, # 可以选择返回 hidden_states
             cache_states=None
         )
     
     def compute_loss(
         self,
-        logits: torch.Tensor,
-        labels: torch.Tensor,
+        hidden_states: torch.Tensor,  # [B, D] 或 [B, N, D]
+        labels: torch.Tensor,  # [B] 或 [B, N]
+        item_embeddings: torch.Tensor,  # [V, D]
     ) -> torch.Tensor:
-        loss = self.loss_fn(
-            logits.view(-1, self.config.item_num + 1), 
-            labels.view(-1)
+        """
+        使用二元交叉熵损失，对每个位置采样正样本和负样本
+        
+        Args:
+            hidden_states: 隐藏状态 [B, D] 或 [B, N, D]
+            labels: 正样本标签 [B] 或 [B, N]
+            item_embeddings: item嵌入矩阵 [V, D]
+        """
+        device = hidden_states.device
+        
+        if hidden_states.dim() == 2:
+            # [B, D] -> [B, 1, D]
+            hidden_states = hidden_states.unsqueeze(1)
+            labels = labels.unsqueeze(1)  # [B] -> [B, 1]
+        
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        num_neg = self.config.num_neg_samples
+        
+        # labels: [B, N] -> [B, N, 1, D]
+        pos_item_embs = item_embeddings[labels]  # [B, N, D]
+        # [B, N, D] * [B, N, D] -> [B, N]
+        pos_logits = (hidden_states * pos_item_embs).sum(dim=-1)  # [B, N]
+        
+        # 负采样
+        neg_items = torch.randint(
+            1, self.config.item_num + 1,  # 避免采样到padding (0)
+            size=(batch_size, seq_len, num_neg),
+            device=device
         )
+        
+        # 避免负样本与正样本重复
+        # 如果采样到正样本，重新采样
+        pos_labels_expanded = labels.unsqueeze(-1)  # [B, N, 1]
+        mask = (neg_items == pos_labels_expanded)  # [B, N, num_neg]
+        while mask.any():
+            new_samples = torch.randint(
+                1, self.config.item_num + 1,
+                size=(batch_size, seq_len, num_neg),
+                device=device
+            )
+            neg_items = torch.where(mask, new_samples, neg_items)
+            mask = (neg_items == pos_labels_expanded)
+        
+        neg_item_embs = item_embeddings[neg_items]  # [B, N, num_neg, D]
+        #[B, N, 1, D] * [B, N, num_neg, D] -> [B, N, num_neg]
+        neg_logits = (hidden_states.unsqueeze(2) * neg_item_embs).sum(dim=-1)
+        
+        if self.SASRec.config.norm_emb:
+            pos_logits = pos_logits / self.config.temperature
+            neg_logits = neg_logits / self.config.temperature
+        
+        # pos_logits: [B, N] -> [B, N, 1]
+        # neg_logits: [B, N, num_neg]
+        all_logits = torch.cat([pos_logits.unsqueeze(-1), neg_logits], dim=-1)  # [B, N, 1+num_neg]
+        
+        pos_labels_binary = torch.ones_like(pos_logits).unsqueeze(-1)  # [B, N, 1]
+        neg_labels_binary = torch.zeros_like(neg_logits)  # [B, N, num_neg]
+        all_labels = torch.cat([pos_labels_binary, neg_labels_binary], dim=-1)  # [B, N, 1+num_neg]
+        
+        valid_mask = (labels != self.config.pad_idx)  # [B, N]
+        
+        if valid_mask.any():
+            valid_logits = all_logits[valid_mask]  # [num_valid, 1+num_neg]
+            valid_labels = all_labels[valid_mask]  # [num_valid, 1+num_neg]
+            
+            loss = self.loss_fn(valid_logits, valid_labels)
+        else:
+            loss = torch.tensor(0.0, device=device)
+        
         return loss
