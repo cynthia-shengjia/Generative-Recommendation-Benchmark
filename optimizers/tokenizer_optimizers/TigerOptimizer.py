@@ -12,8 +12,31 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         self.quant_loss_weight = self.config['quant_loss_weight']
         learning_rate = self.config['learning_rate']
         
-        self.torch_optimizer = torch.optim.Adagrad(self.tokenizer.parameters(), lr=learning_rate)
+        # self.torch_optimizer = torch.optim.Adagrad(self.tokenizer.parameters(), lr=learning_rate)
+        weight_decay = self.config.get('weight_decay', 0.1)
 
+        # 不对 bias 和 bn 应用 weight_decay
+        decay_params = []
+        no_decay_params = []
+        for name, param in self.tokenizer.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            if param.ndim == 1 or "bn" in name or "bias" in name:
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        
+        optimizer_grouped_parameters = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+        ]
+
+
+        self.torch_optimizer = torch.optim.AdamW(
+            optimizer_grouped_parameters, 
+            lr=learning_rate
+        )
     def zero_grad(self):
         self.torch_optimizer.zero_grad()
     

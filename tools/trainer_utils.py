@@ -225,6 +225,7 @@ def setup_training(model, tokenizer, train_dataset, valid_dataset, model_config,
         logging_dir=output_dirs['logs'],
         logging_steps=100,
         report_to=[],
+        warmup_ratio=model_config["warmup_ratio"],
         ddp_find_unused_parameters=False,
         remove_unused_columns=False,
     )

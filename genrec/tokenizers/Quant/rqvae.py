@@ -214,19 +214,14 @@ class VectorQuantizer(nn.Module):
         return z_q
 
     def init_emb(self, data):
-        centers, _ = self.constrained_km(data, self.n_e)
+        centers = kmeans(
+            data,
+            self.n_e,
+            self.kmeans_iters,
+        )
         self.embedding.weight.data.copy_(centers)
         self.initted = True
 
-    def constrained_km(self, data, n_clusters=10):
-        x = data.cpu().detach().numpy()
-        size_min = min(len(data) // (n_clusters * 2), 50)
-        clf = KMeansConstrained(n_clusters=n_clusters, size_min=size_min, size_max=size_min * 4, max_iter=10, n_init=10,
-                                n_jobs=10, verbose=False)
-        clf.fit(x)
-        t_centers = torch.from_numpy(clf.cluster_centers_)
-        t_labels = torch.from_numpy(clf.labels_).tolist()
-        return t_centers, t_labels
 
     @staticmethod
     def center_distance_for_constraint(distances):
