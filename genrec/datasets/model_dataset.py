@@ -42,8 +42,8 @@ class SeqModelTrainingDataset(Dataset):
         # 计算每个物品的token数量（假设所有物品相同）
         self.tokens_per_item = self._get_tokens_per_item()
         self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
-        self._precompute_vocab_ranges_and_masks()
-        # 直接创建样本，而不是先预处理整个序列
+        # self._precompute_vocab_ranges_and_masks()
+
         self.samples = self._create_samples()
     def _precompute_vocab_ranges_and_masks(self):
             """
@@ -71,15 +71,6 @@ class SeqModelTrainingDataset(Dataset):
                     f"self.vocab_size ({self.vocab_size}) 不符。"
                 )
                 end_user = self.vocab_size
-
-            logger.info("--- 词汇表范围 (用于 Loss Mask) ---")
-            logger.info(f"  [0] Reserve:  [{start_reserve}, {end_reserve})")
-            logger.info(f"  [1] Digit 1:  [{start_digit_1}, {end_digit_1})")
-            logger.info(f"  [2] Digit 2:  [{start_digit_2}, {end_digit_2})")
-            logger.info(f"  [3] Digit 3:  [{start_digit_3}, {end_digit_3})")
-            logger.info(f"  [4] Dulicate: [{start_dulicate}, {end_dulicate})")
-            logger.info(f"  [5] User:     [{start_user}, {end_user})")
-            logger.info(f"  Total Vocab Size: {self.vocab_size}")
             
             # 2. [!change] 存储掩码的“构建块”
             
@@ -91,10 +82,54 @@ class SeqModelTrainingDataset(Dataset):
                 list(range(start_digit_1, end_digit_1)),  # 循环 1
                 list(range(start_digit_2, end_digit_2)),  # 循环 2
                 list(range(start_digit_3, end_digit_3)),  # 循环 3
-                list(range(start_dulicate, end_dulicate)) # 循环 4
+                list(range(start_dulicate, end_dulicate)), # 循环 4
             ]
+            self.total_label_len = self.tokens_per_item + 1 
+
+            logger.info("Dataset: Pre-converting cycle mask lists to tensors...")
+            self.cycle_mask_tensors = []
+            for ids_list in self.cycle_masks:
+                if ids_list:
+                    # 转换为长整型张量，用于索引
+                    self.cycle_mask_tensors.append(torch.LongTensor(ids_list))
+                else:
+                    # 以 None 作为占位符
+                    self.cycle_mask_tensors.append(None)
+            
+            # 3. 【核心】预计算静态的 loss_mask
+            logger.info(
+                f"Dataset: Pre-computing static loss mask of shape "
+                f"[{self.total_label_len}, {self.vocab_size}]..."
+            )
+            
+            # 创建一个全零的 mask
+            mask = torch.zeros(
+                self.total_label_len, 
+                self.vocab_size, 
+                dtype=torch.float
+            )
+
+            # 4. 填充这个 mask (这就是从 get_item 移过来的循环)
+            #    (self.digits 是在 __init__ 中从 tokenizer 获取的)
+            for i in range(self.total_label_len):
+                # i 0 4
+                # 0 1 2 3 0
+                # 你的原始逻辑：i=0 -> cycle 0, i=1 -> cycle 1 ... i=4 -> cycle 0
+                cycle_index = i % self.digits
+                
+                # 从预先转换的张量列表中获取
+                allowed_tensor = self.cycle_mask_tensors[cycle_index] 
+                
+                if allowed_tensor is not None:
+                    # 使用高效的张量索引一次性将所有位置设为 1.0
+                    mask[i, allowed_tensor] = 1.0
+            last_position_index = self.total_label_len - 1
+            mask[last_position_index, :] = 0.0
+            mask[last_position_index, self.tokenizer.eos_token] = 1.0
+            # 5. 将最终的 mask 存储为类属性
+            self.precomputed_loss_mask = mask
+            logger.info("Dataset: Static loss mask pre-computation complete.")
     def _load_user_seqs(self) -> Dict[int, List[int]]:
-        # 保持不变
         user_seqs = defaultdict(list)
         with open(self.data_interaction_files, 'rb') as f:
             user_seqs_dataframe = pickle.load(f)
@@ -193,18 +228,11 @@ class SeqModelTrainingDataset(Dataset):
             target_tokens = self.tokenizer.item2tokens[target_item]
         else:
             target_tokens = [0] * self.tokens_per_item
-        L_target = len(target_tokens)
-        total_label_len = L_target + 1
-        
-        allowed_indices = []
-        for i in range(total_label_len):
-            #bos的next为digits1，digits1的next为digits2
-            cycle_index = i % self.digits
-            allowed_indices.append(self.cycle_masks[cycle_index])
+
         return {
             'user_token':    self.tokenizer.get_user_token(user_id),
             'source_tokens': source_tokens,
             'target_tokens': target_tokens,
             "target_id":     target_item,
-            "allowed_indices": allowed_indices
+            # "single_sample_loss_mask": self.precomputed_loss_mask,
         }

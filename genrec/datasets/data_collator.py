@@ -14,14 +14,16 @@ class TrainSeqRecDataCollator:
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         input_ids_list = []
         labels_list = []
+        loss_mask_list = []
+        unpadded_label_lengths = []
         target_allowed_indices_list = []
-        has_vocab_mask_info = "target_allowed_indices" in features[0]
+        has_vocab_mask_info = "single_sample_loss_mask" in features[0]
         for feature in features:
             source_tokens = feature["source_tokens"]
             target_tokens = feature["target_tokens"]
             user_token       = feature['user_token']
             # 应用偏移到源序列（历史）
-            transformed_source = [user_token] + source_tokens
+            transformed_source = source_tokens
             # 截断或填充源序列
             if len(transformed_source) > self.max_seq_len:
                 transformed_source = transformed_source[-self.max_seq_len:]
@@ -36,21 +38,26 @@ class TrainSeqRecDataCollator:
                 transformed_target.append(token)
             transformed_target.append(self.eos_token_id)
             labels_list.append(transformed_target)
-
+            unpadded_label_lengths.append(len(transformed_target))
             if has_vocab_mask_info:
-                allowed_indices = feature.get("target_allowed_indices")
+                # 直接获取预先计算好的 mask
+                loss_mask_list.append(feature["single_sample_loss_mask"])
+            # if has_vocab_mask_info:
+            #     allowed_indices = feature.get("allowed_indices")
                 
-                if allowed_indices is None or len(allowed_indices) != len(transformed_target):
-                    raise ValueError(
-                        f"Dataset 错误：'target_allowed_indices' 的长度 "
-                        f"({len(allowed_indices) if allowed_indices else 'None'}) "
-                        f"与 'target_tokens' + EOS 的长度 ({len(transformed_target)}) 不匹配。"
-                    )
-                target_allowed_indices_list.append(allowed_indices)
+            #     if allowed_indices is None or len(allowed_indices) != len(transformed_target):
+            #         raise ValueError(
+            #             f"Dataset 错误：'allowed_indices' 的长度 "
+            #             f"({len(allowed_indices) if allowed_indices else 'None'}) "
+            #             f"与 'target_tokens' + EOS 的长度 ({len(transformed_target)}) 不匹配。"
+            #         )
+            #     target_allowed_indices_list.append(allowed_indices)
         # 填充标签序列，用-100忽略填充部分的损失
-        max_label_len = max(len(lbl) for lbl in labels_list)
+        # max_label_len = max(len(lbl) for lbl in labels_list)
+        max_label_len = max(unpadded_label_lengths)
         for i in range(len(labels_list)):
-            labels_list[i] = labels_list[i] + [-100] * (max_label_len - len(labels_list[i]))
+            padding_len = max_label_len - unpadded_label_lengths[i]
+            labels_list[i] = labels_list[i] + [-100] * padding_len
         # 添加 loss_mask，1代表可计算loss，0代表mask
         batch_size = len(features)
         batch = {
@@ -59,31 +66,25 @@ class TrainSeqRecDataCollator:
             "labels": torch.tensor(labels_list, dtype=torch.long),
         }
         if has_vocab_mask_info:
-            # 1. 初始化一个全 0 的 mask
-            #    形状: [batch_size, max_label_len, vocab_size]
-            loss_mask = torch.zeros(
-                batch_size, 
-                max_label_len, 
-                self.vocab_size,
-                dtype=torch.float
-            )
+            padded_loss_masks = []
+            # 这里的 V (vocab_size) 是从 mask.shape[1] 自动推断的
+            V = loss_mask_list[0].shape[1] 
             
-            # 2. 遍历批次中的每个序列
-            for i in range(batch_size):
-                # 3. 遍历序列中的每个 *真实* (非填充) token
-                unpadded_len = unpadded_label_lengths[i]
-                for j in range(unpadded_len):
-                    
-                    # 4. 获取为这个 [i, j] token 允许的 vocab ID 列表
-                    allowed_vocab_ids = target_allowed_indices_list[i][j]
-                    
-                    # 5. 如果列表不为空，则将这些位置的 mask 设置为 1.0
-                    if allowed_vocab_ids:
-                        # 我们使用 torch.LongTensor 进行高级索引
-                        loss_mask[i, j, torch.LongTensor(allowed_vocab_ids)] = 1.0
+            for i in range(len(loss_mask_list)):
+                mask = loss_mask_list[i] # shape [seq_len, V]
+                padding_len = max_label_len - mask.shape[0] # mask.shape[0] == unpadded_label_lengths[i]
+                
+                # 使用 F.pad 进行高效填充
+                # (0, 0) -> 不填充最后一个维度 (V)
+                # (0, padding_len) -> 在倒数第二个维度 (seq_len) 的 *末尾* 填充 padding_len 个 0
+                padded_mask = torch.nn.functional.pad(
+                    mask, (0, 0, 0, padding_len), "constant", 0.0
+                )
+                padded_loss_masks.append(padded_mask)
             
-            # 6. 将最终的 mask 添加到批次中
-            batch["loss_mask"] = loss_mask
+            # 4. 将列表堆叠成批次
+            #    [B, max_label_len, V]
+            batch["loss_mask"] = torch.stack(padded_loss_masks, dim=0)
         return batch
         # return {
         #     "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
@@ -110,7 +111,7 @@ class TestSeqRecDataCollator:
             label_id      = feature['target_id']
             
             # 应用偏移到源序列（历史）
-            transformed_source = [user_token] + source_tokens
+            transformed_source = source_tokens
             # 截断或填充源序列
             if len(transformed_source) > self.max_seq_len:
                 transformed_source = transformed_source[-self.max_seq_len:]

@@ -2,6 +2,7 @@ import torch
 from typing import Dict, List, Tuple
 from transformers import T5ForConditionalGeneration,T5Config,Trainer
 from genrec.cbs_structure.generate_trie import Trie, prefix_allowed_tokens_fn
+from torch import nn
 class GenerativeTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.generation_params = kwargs.pop('generation_params', {})
@@ -65,17 +66,12 @@ class GenerativeTrainer(Trainer):
         return (loss, generated_ids_reshaped, inputs.get("labels"))
     def compute_loss(self, model, inputs, return_outputs=False,num_items_in_batch=None):
         
-        # 1. 弹出自定义的 loss_mask
-        #    **重要: 假设这个 mask 的形状是 [batch, seq_len, vocab_size]**
         loss_mask = inputs.pop("loss_mask", None)
         labels = inputs.get("labels")
-
         # 2. 正常运行模型前向传播
         outputs = model(**inputs)
         logits = outputs.logits # 形状: [batch, seq_len, vocab_size]
-
         loss = None
-        # 3. 检查是否需要自定义 loss 计算
         if labels is not None:
             #loss_mask [batch_size, seq_len, vocab_size]
             if loss_mask is not None:
@@ -83,14 +79,11 @@ class GenerativeTrainer(Trainer):
                 masked_logits = logits.masked_fill(loss_mask == 0.0, -1e9)
 
                 loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-
-
+                unwrapped_model = self.accelerator.unwrap_model(model)
                 loss = loss_fct(
-                    masked_logits.view(-1, model.config.vocab_size), 
+                    masked_logits.view(-1, unwrapped_model.config.vocab_size),
                     labels.view(-1)
                 )
-                
-                
             else:
                 loss = outputs.loss
 
