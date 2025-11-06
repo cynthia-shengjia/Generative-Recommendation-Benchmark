@@ -5,10 +5,9 @@ from tqdm import tqdm
 from datetime import datetime
 from accelerate import Accelerator
 from transformers import get_linear_schedule_with_warmup
-from genrec.models.MyCustomT5.CustomT5 import CustomT5ForConditionalGeneration
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from tools.utils import calc_ndcg, tokens_to_item_id
-from typing import Optional, Dict, Any, List, Union, Callable  # 添加了必要的导入
+from typing import Optional, Dict, Any, List, Union, Callable
 import math
 import logging
 import re
@@ -44,28 +43,6 @@ def create_t5_model(vocab_size: int, model_config: dict) -> T5ForConditionalGene
     )
     
     model = T5ForConditionalGeneration(config)
-    return model
-
-def create_custom_t5_model(vocab_size: int, model_config: dict, tokens_per_item:int,num_items:int,max_seq_len:int) -> CustomT5ForConditionalGeneration:
-    config = T5Config(
-        vocab_size=vocab_size,
-        d_model = model_config['d_model'],  # 计算 d_model
-        d_kv=model_config['d_kv'],
-        d_ff=model_config['d_ff'],
-        num_layers=model_config['num_layers'],
-        num_decoder_layers=model_config['num_decoder_layers'],
-        num_heads=model_config['num_heads'],
-        dropout_rate=model_config['dropout_rate'],
-        tie_word_embeddings=model_config['tie_word_embeddings'],
-        pad_token_id=0,
-        eos_token_id=1,
-        decoder_start_token_id=0,
-        tokens_per_item=tokens_per_item,
-        num_items=num_items,
-        max_seq_len = max_seq_len
-    )
-    
-    model = CustomT5ForConditionalGeneration(config)
     return model
 
 
@@ -411,258 +388,6 @@ def _get_historical_items(input_ids_tensor, tokenizer):
             
     return history
 
-# def evaluate_model_with_constrained_beam_search(
-#     model,
-#     eval_dataloader,
-#     accelerator,
-#     tokenizer,
-#     k_list=[1, 5, 10],
-#     num_beams=10,
-#     max_gen_length=5,
-#     logger=None,
-#     mode="Evaluation",
-#     num_visualize_samples=10,
-#     visualization_dir="attention_heatmaps",
-#     output_json_path="predictions.json",
-#     vector_output_path="vocab_vectors.txt",
-# ):
-#     """
-#     评估模型或可视化注意力。
-#     - num_visualize_samples > 0: 激活可视化模式。
-#     - visualize_individual_heads = True: 为每个头单独画图。
-#     - visualize_individual_heads = False: 只画所有头的平均图。
-#     """
-#     # if accelerator.is_main_process:
-#     #     extract_and_save_vectors(model, output_file_path=vector_output_path)
-    
-#     # accelerator.wait_for_everyone()
-    
-#     # print("向量提取任务完成，函数将提前退出，不执行后续评估。")
-#     # return
-#     model.eval()
-
-#     if num_visualize_samples > 0:
-#         all_samples_metrics = []
-#         if accelerator.is_main_process:
-#             print(f"进入仅可视化模式，将为 {num_visualize_samples} 个样本绘制热力图...")
-#             os.makedirs(visualization_dir, exist_ok=True)
-#             print(f"热力图将保存到: '{visualization_dir}/'")
-
-#         device = accelerator.device
-#         samples_drawn = 0
-#         with torch.no_grad():
-#             for batch_idx, batch in enumerate(eval_dataloader):
-#                 if samples_drawn >= num_visualize_samples: break
-#                 # ... (generate a output is same as before)
-#                 input_ids = batch['input_ids'].to(device)
-#                 attention_mask = batch['attention_mask'].to(device)
-#                 outputs = model.generate(
-#                     input_ids=input_ids, attention_mask=attention_mask, max_length=2,
-#                     num_beams=1, return_dict_in_generate=True, output_attentions=True
-#                 )
-#                 if not (hasattr(outputs, 'encoder_attentions') and outputs.encoder_attentions is not None):
-#                     if accelerator.is_main_process:
-#                         print("错误: 模型输出中未找到 'encoder_attentions'。")
-#                     return
-                
-#                 last_layer_attentions = outputs.encoder_attentions[-1] # Shape: (batch, heads, seq, seq)
-                
-#                 for i in range(input_ids.size(0)):
-#                     if samples_drawn >= num_visualize_samples: break
-
-#                     if accelerator.is_main_process:
-#                         print(f"\n--- 正在分析 Batch {batch_idx}, Sample {i} ---")
-#                         sample_attentions = last_layer_attentions[i] # Shape: (heads, seq, seq)
-#                         sample_input_ids = input_ids[i].cpu().tolist()
-                        
-#                         # 获取有效序列长度 (不含padding)
-#                         non_pad_indices = [idx for idx, token_id in enumerate(sample_input_ids) if token_id != 0]
-#                         effective_seq_len = len(non_pad_indices)
-
-#                         # --- 1. 计算与分析 (基于平均注意力) ---
-#                         avg_attention_weights = sample_attentions.mean(dim=0)
-#                         effective_attention_matrix = avg_attention_weights[-effective_seq_len:, -effective_seq_len:]
-#                         # 调用新函数计算指标
-#                         metrics = calculate_token_level_attention_v3(
-#                             effective_attention_matrix.cpu().numpy(), 
-#                             effective_seq_len,
-#                             #  f"batch_{batch_idx}_sample_{i}"
-#                         )
-#                         metrics["sample_id"] = f"batch_{batch_idx}_sample_{i}"
-#                         all_samples_metrics.append(metrics)
-
-#                         # 打印计算结果
-#                         if not metrics:
-#                             print("  - 序列有效token不足，无法进行分析。")
-#                         else:
-#                             # 打印Intra vs Inter的比较
-#                             print(f"  - Token级平均内部注意力: {metrics['token_level_avg_intra_item_attention (without_self)']:.4f}")
-#                             print(f"  - Token级平均外部注意力: {metrics['token_level_avg_inter_item_attention']:.4f}")
-#                             print(f"  - 比较结果: {metrics['comparison']}")
-                            
-#                             # 打印对每个item的平均注意力
-#                             print("  - 对每个目标Item的平均注意力:")
-#                             for item_data in metrics['avg_attention_to_each_item']:
-#                                 print(f"    - 对Item {item_data['target_item_index']}: {item_data['avg_attention_score']:.4f}")
-                        
-#                         # print(f"分析结果:")
-#                         # print(f"  - 平均近距离分数: {metrics['avg_near_score']:.4f} (基于 {metrics['near_scores_count']} 个分数)")
-#                         # print(f"  - 平均远距离分数: {metrics['avg_far_score']:.4f} (基于 {metrics['far_scores_count']} 个分数)")
-#                         # print(f"  - 比较结论: {metrics['comparison']}")
-#                         sample_output_dir = os.path.join(visualization_dir, f"batch_{batch_idx}_sample_{i}")
-#                         os.makedirs(sample_output_dir, exist_ok=True)
-#                         avg_file_path = os.path.join(sample_output_dir, "heatmap_average.png")
-#                         plot_encoder_attention_heatmap(avg_attention_weights, input_ids[i], file_path=avg_file_path)
-
-#                         num_heads = sample_attentions.shape[0]
-#                         for head_idx in range(num_heads):
-#                             head_attention_weights = sample_attentions[head_idx] # Shape: (seq, seq)
-#                             file_path = os.path.join(sample_output_dir, f"head_{head_idx}_heatmap.png")
-                            
-#                             plot_encoder_attention_heatmap(
-#                                 head_attention_weights,
-#                                 sample_input_ids,
-#                                 file_path=file_path,
-#                                 head_index=head_idx # 传入当前头的索引
-#                             )
-                    
-#                     samples_drawn += 1
-                
-#         if accelerator.is_main_process:
-#             print(f"已成功为 {samples_drawn} 个样本生成可视化图像。")
-#         return
-#     tokens_to_item_map = tokenizer.tokens2item
-#     item_to_tokens_map = tokenizer.item2tokens
-#     candidate_trie = Trie(tokenizer.item2tokens)
-#     prefix_allowed_fn = prefix_allowed_tokens_fn(candidate_trie)
-#     all_predictions = []
-#     all_labels = []
-#     device = accelerator.device
-#     progress_bar = tqdm(eval_dataloader, desc=f"{mode}", disable=not accelerator.is_main_process)
-#     for batch_idx, batch in enumerate(progress_bar):
-#         input_ids = batch['input_ids'].to(device)
-#         attention_mask = batch['attention_mask'].to(device)
-#         true_item_ids = batch['label_id']
-
-#         outputs = model.generate(
-#             input_ids=input_ids,
-#             attention_mask=attention_mask,
-#             max_length=max_gen_length,
-#             num_beams=num_beams,
-#             num_return_sequences=num_beams,
-#             early_stopping=True,
-#             pad_token_id=0,
-#             eos_token_id=1,
-#             output_scores=True,
-#             return_dict_in_generate=True,
-#             prefix_allowed_tokens_fn=prefix_allowed_fn
-#         )
-#         generated_ids = outputs.sequences
-#         sequences_scores = outputs.sequences_scores
-#         batch_size = input_ids.size(0)
-#         generated_ids_reshaped = generated_ids.view(batch_size, num_beams, -1)[:, :, 1:]
-#         probabilities_reshaped = torch.exp(sequences_scores).view(batch_size, num_beams)
-#         batch_predictions = []
-#         batch_labels = []
-#         for i in range(batch_size):
-#             true_item_id = true_item_ids[i]
-#             true_item_tokens = item_to_tokens_map.get(true_item_id, []) 
-#             # batch_labels.append(true_item_id)
-#             batch_labels.append({
-#                 'id': true_item_id,
-#                 'tokens': true_item_tokens
-#             })
-#             user_sequences = generated_ids_reshaped[i]
-#             user_probs = probabilities_reshaped[i]
-#             sorted_indices = torch.argsort(user_probs, descending=True)
-#             sorted_sequences = user_sequences[sorted_indices]
-#             # item_ids = []
-#             # for seq in sorted_sequences:
-#             #     item_id = tokens_to_item_id(seq.tolist(), tokens_to_item_map)
-#             #     item_ids.append(item_id)
-#             predictions_with_tokens = []
-#             for seq in sorted_sequences:
-#                 pred_tokens = seq.tolist()
-#                 item_id = tokens_to_item_id(pred_tokens, tokens_to_item_map)
-#                 predictions_with_tokens.append({
-#                     'id': item_id,
-#                     'tokens': pred_tokens
-#                 })
-#             unique_predictions = []
-#             seen_ids = set()
-#             for pred in predictions_with_tokens:
-#                 if pred['id'] not in seen_ids:
-#                     unique_predictions.append(pred)
-#                     seen_ids.add(pred['id'])
-#             # item_ids = [x for x in item_ids if not (x in seen or seen.add(x))]
-#             # batch_predictions.append(item_ids)
-#             batch_predictions.append(unique_predictions)
-#         gathered_predictions = accelerator.gather_for_metrics(batch_predictions)
-#         gathered_labels = accelerator.gather_for_metrics(batch_labels)
-#         all_predictions.extend(gathered_predictions)
-#         all_labels.extend(gathered_labels)
-
-#     if accelerator.is_main_process:
-#         metrics = {f'hit@{k}': 0 for k in k_list}
-#         metrics.update({f'ndcg@{k}': 0 for k in k_list})
-#         total_samples = len(all_labels)
-#         results_to_save = []
-#         for label_info, prediction_list in zip(all_labels, all_predictions):
-            
-#             true_item_id = label_info['id']
-#             # 从预测结果（字典列表）中提取出 ID 列表，用于计算指标
-#             predicted_item_ids = [p['id'] for p in prediction_list]
-
-#             # --- 指标计算代码 ---
-#             for k in k_list:
-#                 top_k_ids = predicted_item_ids[:k]
-#                 hit = 1 if true_item_id in top_k_ids else 0
-#                 metrics[f'hit@{k}'] += hit
-#                 if hit:
-#                     rank = top_k_ids.index(true_item_id) + 1
-#                     ndcg = 1 / math.log2(rank + 1)
-#                     metrics[f'ndcg@{k}'] += ndcg
-            
-#             # ===== 改动 5: 构建更丰富的 JSON 对象 =====
-#             sample_result = {
-#                 'label_id': label_info['id'],
-#                 'label_tokens': label_info['tokens'],
-#                 'predictions': [
-#                     {
-#                         'predicted_id': p['id'],
-#                         'predicted_tokens': p['tokens']
-#                     } for p in prediction_list # 保存所有去重后的预测结果
-#                 ]
-#             }
-#             results_to_save.append(sample_result)
-#         # for true_item_id, predicted_items in zip(all_labels, all_predictions):
-#         #     for k in k_list:
-#         #         top_k_items = predicted_items[:k]
-#         #         hit = 1 if true_item_id in top_k_items else 0
-#         #         metrics[f'hit@{k}'] += hit
-#         #         if hit:
-#         #             rank = top_k_items.index(true_item_id) + 1
-#         #             ndcg = 1 / math.log2(rank + 1)
-#         #             metrics[f'ndcg@{k}'] += ndcg
-#         #     sample_result = {
-#         #         'label': true_item_id,
-#         #         'top10_predictions': predicted_items
-#         #     }
-#         #     results_to_save.append(sample_result) # 将字典添加到列表中
-#         final_metrics = {}
-#         for key, value in metrics.items():
-#             final_metrics[key] = value / total_samples
-
-#         if logger:
-#             logger.info(f"\n{mode} 结果 (共 {total_samples} 个样本):")
-#             for k in k_list:
-#                 logger.info(f"Hit@{k}: {final_metrics[f'hit@{k}']:.4f}, NDCG@{k}: {final_metrics[f'ndcg@{k}']:.4f}")
-#         with open(output_json_path, 'w', encoding='utf-8') as f:
-#             json.dump(results_to_save, f, indent=4, ensure_ascii=False)
-        
-#         if logger:
-#             logger.info(f"Top-10 预测结果已保存到: {output_json_path}")
-#         return final_metrics.
 import csv
 def calculate_and_log_attention_stats(
     attention_matrix, 
@@ -960,12 +685,12 @@ def evaluate_model_with_constrained_beam_search(
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
         true_item_ids = batch['label_id']
-        encoder_item_ids = batch['encoder_item_ids'].to(device) 
+        # encoder_item_ids = batch['encoder_item_ids'].to(device) 
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_length=max_gen_length,
-            encoder_item_ids=encoder_item_ids,
+            # encoder_item_ids=encoder_item_ids,
             num_beams=num_beams,
             num_return_sequences=num_beams,
             early_stopping=True,

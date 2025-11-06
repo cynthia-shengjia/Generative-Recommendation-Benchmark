@@ -9,7 +9,7 @@ from genrec.models.CustomT5.T5Model import CustomT5ForConditionalGeneration
 from genrec.models.CustomT5.T5Config import CustomT5Config
 from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 from tools.utils import calc_ndcg, tokens_to_item_id
-from typing import Optional, Dict, Any, List, Union, Callable  # 添加了必要的导入
+from typing import Optional, Dict, Any, List, Union, Callable 
 import math
 import logging
 import re

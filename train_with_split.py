@@ -147,7 +147,8 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             max_seq_len=train_dataset.max_token_len,
             pad_token_id=tokenizer.pad_token,
             eos_token_id=tokenizer.eos_token,
-            tokens_per_item=train_dataset.tokens_per_item
+            tokens_per_item=train_dataset.tokens_per_item,
+            vocab_size=tokenizer.vocab_size
         )
         
         test_data_collator = TestSeqRecDataCollator(
