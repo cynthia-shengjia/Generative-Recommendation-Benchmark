@@ -8,7 +8,6 @@ class TrainSeqRecDataCollator:
     max_seq_len: int
     pad_token_id: int
     eos_token_id: int
-    vocab_size: int
     tokens_per_item: int = 4  # 假设每个物品有4个token
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
