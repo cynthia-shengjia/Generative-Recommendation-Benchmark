@@ -604,7 +604,7 @@ def stage3_grpo_training(
         return False
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config")
+@hydra.main(version_base=None, config_path="config", config_name="rl_config")
 def main(cfg: DictConfig):
     """主函数"""
     seed = getattr(cfg, 'seed', 42)
