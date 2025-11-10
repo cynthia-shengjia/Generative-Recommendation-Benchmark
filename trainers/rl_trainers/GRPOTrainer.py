@@ -21,106 +21,10 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
 from trl import GRPOConfig
 from trl.trainer.utils import pad
-
+from genrec.cbs_structure.generate_trie import Trie,prefix_allowed_tokens_fn
 
 if is_wandb_available():
     import wandb
-
-class Trie(object):
-    def __init__(self, item2tokens: Dict[int, List] = {}):
-        self.trie_dict = {}
-        self.len = 0
-        sequences = self.add_prefix(item2tokens)
-        if sequences:
-            for sequence in sequences:
-                Trie._add_to_trie(sequence, self.trie_dict)
-                self.len += 1
-
-        self.append_trie = None
-        self.bos_token_id = None
-
-    def add_prefix(self, item2tokens: Dict[int, List]):
-        prefix_added_items = [[0] + list(items)  for _, items in item2tokens.items()]
-        return prefix_added_items
-
-    def append(self, trie, bos_token_id):
-        self.append_trie = trie
-        self.bos_token_id = bos_token_id
-
-    def add(self, sequence: List[int]):
-        Trie._add_to_trie(sequence, self.trie_dict)
-        self.len += 1
-
-    def get(self, prefix_sequence: List[int]):
-        return Trie._get_from_trie(
-            prefix_sequence, self.trie_dict, self.append_trie, self.bos_token_id
-        )
-
-    @staticmethod
-    def load_from_dict(trie_dict):
-        trie = Trie()
-        trie.trie_dict = trie_dict
-        trie.len = sum(1 for _ in trie)
-        return trie
-
-    @staticmethod
-    def _add_to_trie(sequence: List[int], trie_dict: Dict):
-        if sequence:
-            if sequence[0] not in trie_dict:
-                trie_dict[sequence[0]] = {}
-            Trie._add_to_trie(sequence[1:], trie_dict[sequence[0]])
-
-    @staticmethod
-    def _get_from_trie(
-        prefix_sequence: List[int],
-        trie_dict: Dict,
-        append_trie=None,
-        bos_token_id: int = None,
-    ):
-        if len(prefix_sequence) == 0:
-            output = list(trie_dict.keys())
-            if append_trie and bos_token_id in output:
-                output.remove(bos_token_id)
-                output += list(append_trie.trie_dict.keys())
-            return output
-        elif prefix_sequence[0] in trie_dict:
-            return Trie._get_from_trie(
-                prefix_sequence[1:],
-                trie_dict[prefix_sequence[0]],
-                append_trie,
-                bos_token_id,
-            )
-        else:
-            if append_trie:
-                return append_trie.get(prefix_sequence)
-            else:
-                return []
-
-    def __iter__(self):
-        def _traverse(prefix_sequence, trie_dict):
-            if trie_dict:
-                for next_token in trie_dict:
-                    yield from _traverse(
-                        prefix_sequence + [next_token], trie_dict[next_token]
-                    )
-            else:
-                yield prefix_sequence
-
-        return _traverse([], self.trie_dict)
-
-    def __len__(self):
-        return self.len
-
-    def __getitem__(self, value):
-        return self.get(value)
-
-def prefix_allowed_tokens_fn(candidate_trie):
-    def prefix_allowed_tokens(batch_id, sentence):
-        sentence = sentence.tolist()
-        trie_out = candidate_trie.get(sentence)
-        return trie_out
-
-    return prefix_allowed_tokens
 
 class RepeatRandomSampler(Sampler):
     """
@@ -152,32 +56,14 @@ class RepeatRandomSampler(Sampler):
 class GRPOTrainerForGenRec(Trainer):
     """
     GRPO Trainer for Generative Recommendation with Encoder-Decoder models.
-
-    Example:
-        {
-            'input_ids':        [0,0,0,..., 1,178,234,2,169,278] # 代表历史交互序列
-            'attention_mask':   [0,0,0,..., 1,1,1,1,1,1,1]  
-            'labels':           [5,201,323,1]
-        }
-    
-    Args:
-        model: T5ForConditionalGeneration model
-        item2tokens: Dict mapping item_id to list of token_ids
-        args: GRPOConfig
-        train_dataset: Training dataset
-        eval_dataset: Evaluation dataset
-        data_collator: Data collator
-        reward_func: Reward function (callable)
-        callbacks: List of callbacks
-        optimizers: Tuple of optimizer and scheduler
     """
-
+    
     _tag_names = ["trl", "grpo", "genrec"]
-
+    
     def __init__(
         self,
         model: T5ForConditionalGeneration,
-        item2tokens: Dict[int, List[int]],
+        tokenizer,  # 添加 tokenizer 参数
         args: GRPOConfig = None,
         train_dataset=None,
         eval_dataset=None,
@@ -190,43 +76,50 @@ class GRPOTrainerForGenRec(Trainer):
         if args is None:
             model_name = model.config._name_or_path if hasattr(model.config, '_name_or_path') else "t5-genrec"
             args = GRPOConfig(f"{model_name}-GRPO")
-
-        # Store item2tokens mapping
-        self.item2tokens = item2tokens
+        
+        # Store tokenizer
+        self.tokenizer = tokenizer
+        
+        # Get item2tokens from tokenizer
+        self.item2tokens = tokenizer.item2tokens
         
         # Create reverse mapping: tokens -> item
-        self.tokens2item = {}
-        for item_id, tokens in item2tokens.items():
-            tokens_tuple = tuple(tokens)
-            self.tokens2item[tokens_tuple] = item_id
-
+        self.tokens2item = tokenizer.tokens2item
+        
         # Build Trie for constrained generation
-        self.candidate_trie = Trie(item2tokens)
+        self.candidate_trie = Trie(self.item2tokens)
         self.prefix_allowed_fn = prefix_allowed_tokens_fn(self.candidate_trie)
-
+        
         # Training arguments
         self.max_seq_len = args.max_prompt_length if args.max_prompt_length else 512
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
         self.beta = args.beta
-        self.pad_token_id = model.config.pad_token_id
-        self.eos_token_id = model.config.eos_token_id
+        self.pad_token_id = tokenizer.pad_token
+        self.eos_token_id = tokenizer.eos_token
         self.decoder_start_token_id = model.config.decoder_start_token_id
-
+        
         # Reward function
         self.reward_func = reward_func if reward_func else self._default_reward_func
-
+        
         # Create reference model
         self.ref_model = self._create_reference_model(model)
-
+        
         # Initialize metrics
         self._metrics = defaultdict(list)
         self.log_completions = args.log_completions if hasattr(args, 'log_completions') else False
-
-        # Data collator
+        
+        # Data collator - 使用你的 TrainSeqRecDataCollator
         if data_collator is None:
-            data_collator = lambda features: features
-
+            from genrec.datasets.data_collator import TrainSeqRecDataCollator
+            tokens_per_item = len(next(iter(self.item2tokens.values())))
+            data_collator = TrainSeqRecDataCollator(
+                max_seq_len=self.max_seq_len,
+                pad_token_id=self.pad_token_id,
+                eos_token_id=self.eos_token_id,
+                tokens_per_item=tokens_per_item
+            )
+        
         super().__init__(
             model=model,
             args=args,
@@ -236,10 +129,10 @@ class GRPOTrainerForGenRec(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
-
+        
         # Set unique seed for each process
         set_seed(args.seed, device_specific=True)
-
+        
         # Prepare reference model
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -247,7 +140,7 @@ class GRPOTrainerForGenRec(Trainer):
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-
+        
         # Validation
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes

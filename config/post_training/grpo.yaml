@@ -1,0 +1,26 @@
+# 训练参数
+num_epochs: 1
+batch_size: 256  # 必须能被 num_generations 整除
+test_batch_size: 8
+learning_rate: 1.0e-5
+weight_decay: 0.01
+
+# GRPO 特有参数
+max_prompt_length: 50
+max_completion_length: 5  # decoder_start + tokens_per_item + eos
+num_generations: 2  # 每个 prompt 生成的样本数
+beta: 0.1  # KL 惩罚系数，控制与参考模型的偏离程度
+temperature: 1.0
+
+# 评估参数
+num_beams: 10
+max_gen_length: 5
+k_list: [1, 5, 10]
+
+# 日志
+logging_steps: 10
+
+# 随机种子
+seed: 42
+
+pretrained_model_path: "/home/zsj/pretrained-models/RQ-VAE-bs-1024-lr-0.001-dropout-0/generation_model/checkpoint-211"
