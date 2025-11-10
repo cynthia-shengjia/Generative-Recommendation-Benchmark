@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - model: t5
+  - tokenizer: rqvae
+  - post_training: grpo
+
+dataset: "Toys and Games"
+output_dir: "/home/zsj/models/tigger-lr-1e-3"
+cuda: "0"
+force_retrain_tokenizer: false
+force_retrain_model: false
+skip_tokenizer: true
+skip_model: true
+skip_grpo: false  # 新增：控制是否跳过 GRPO 训练
