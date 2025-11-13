@@ -382,200 +382,12 @@ def stage3_grpo_training(
             mode="GRPO Test"
         )
         
-        # 保存最终模型（使用 Hugging Face 格式）
-        if accelerator.is_main_process:
-            grpo_model_save_dir = os.path.join(
-                output_dirs['grpo_model'],
-                "final_model"
+
+        if "NNI_PLATFORM" in os.environ:
+            report_nni_metrics(
+                test_metrics,
+                True
             )
-            os.makedirs(grpo_model_save_dir, exist_ok=True)
-            
-            # 保存模型和配置
-            model.save_pretrained(grpo_model_save_dir)
-            
-            logger.info(f"GRPO 模型已保存到: {grpo_model_save_dir}")
-            logger.info("保存的文件包括:")
-            for file in os.listdir(grpo_model_save_dir):
-                logger.info(f"  - {file}")
-            logger.info("GRPO 训练和评估完成!")
-        
-        return True
-        
-    except Exception as e:
-        if accelerator.is_main_process:
-            logger.error(f"GRPO 训练失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
-        return False
-
-
-# train.py 的修改部分
-
-def stage3_grpo_training(
-    model_config,
-    grpo_config,
-    rqvae_config,
-    output_dirs,
-    accelerator,
-    logger,
-    pretrained_model_path
-):
-    """
-    阶段3: GRPO 强化学习训练
-    
-    Args:
-        model_config: 模型配置
-        grpo_config: GRPO 配置
-        rqvae_config: Tokenizer 配置
-        output_dirs: 输出目录
-        accelerator: Accelerator 实例
-        logger: 日志记录器
-        pretrained_model_path: 预训练模型目录路径（注意是目录，不是文件）
-    """
-    if accelerator.is_main_process:
-        logger.info("\n" + "="*60)
-        logger.info("阶段3: GRPO 强化学习训练")
-        logger.info("="*60)
-    
-    # 检查预训练模型是否存在
-    if pretrained_model_path is None or not os.path.exists(pretrained_model_path):
-        if accelerator.is_main_process:
-            logger.error(f"错误: 找不到预训练模型目录: {pretrained_model_path}")
-            logger.error("请先运行阶段2进行预训练")
-        return False
-    
-    # 检查必要的模型文件
-    required_files = ['config.json', 'model.safetensors']
-    for file in required_files:
-        file_path = os.path.join(pretrained_model_path, file)
-        if not os.path.exists(file_path):
-            if accelerator.is_main_process:
-                logger.error(f"错误: 找不到必要的模型文件: {file_path}")
-            return False
-    
-    # 加载 tokenizer
-    tokenizer_object_path = rqvae_config['tokenizer_path']
-    if not os.path.exists(tokenizer_object_path):
-        if accelerator.is_main_process:
-            logger.error(f"错误: 找不到 tokenizer: {tokenizer_object_path}")
-        return False
-    
-    try:
-        if accelerator.is_main_process:
-            logger.info(f"正在从 {tokenizer_object_path} 加载 tokenizer...")
-        
-        from genrec.tokenizers.TigerTokenizer import TigerTokenizer
-        tokenizer = TigerTokenizer.load(tokenizer_object_path)
-        
-        if accelerator.is_main_process:
-            logger.info(f"成功加载 tokenizer，包含 {len(tokenizer.item2tokens)} 个物品")
-            logger.info("从预训练检查点加载模型...")
-        
-        # 使用 from_pretrained 加载模型
-        from transformers import T5ForConditionalGeneration
-        
-        model = T5ForConditionalGeneration.from_pretrained(
-            pretrained_model_path,
-            local_files_only=True
-        )
-        
-        if accelerator.is_main_process:
-            total_params = sum(p.numel() for p in model.parameters())
-            logger.info(f"预训练模型加载完成，参数量: {total_params:,}")
-            logger.info(f"模型配置: {model.config}")
-            logger.info("创建数据集...")
-        
-        # 创建数据集 - 使用相同的训练集进行 GRPO 训练
-        from genrec.datasets.model_dataset import SeqModelTrainingDataset
-        
-        train_dataset = SeqModelTrainingDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='train'  # 使用训练集
-        )
-        
-        eval_dataset = SeqModelTrainingDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='valid'  # 使用验证集
-        )
-        
-        test_dataset = SeqModelTrainingDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='test'
-        )
-        
-        if accelerator.is_main_process:
-            logger.info(f"训练集样本数: {len(train_dataset)}")
-            logger.info(f"验证集样本数: {len(eval_dataset)}")
-            logger.info(f"测试集样本数: {len(test_dataset)}")
-            logger.info("设置 GRPO 训练...")
-        
-        # 设置 GRPO 训练
-        from tools.grpo_trainer_utils import setup_grpo_training
-        
-        trainer = setup_grpo_training(
-            model=model,
-            tokenizer=tokenizer,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            grpo_config=grpo_config,
-            output_dirs=output_dirs,
-            logger=logger,
-            pretrained_model_path=None  # 已经加载了模型
-        )
-        
-        if accelerator.is_main_process:
-            logger.info("开始 GRPO 训练...")
-        
-        # 训练
-        trainer.train()
-        
-        accelerator.wait_for_everyone()
-        
-        # 评估
-        if accelerator.is_main_process:
-            logger.info("GRPO 训练完成，开始最终评估...")
-        
-        # 使用约束 beam search 进行测试评估
-        from torch.utils.data import DataLoader
-        from genrec.datasets.data_collator import TestSeqRecDataCollator
-        from tools.train_utils import evaluate_model_with_constrained_beam_search
-        
-        test_data_collator = TestSeqRecDataCollator(
-            max_seq_len=train_dataset.max_token_len,
-            pad_token_id=tokenizer.pad_token,
-            eos_token_id=tokenizer.eos_token,
-            tokens_per_item=train_dataset.tokens_per_item
-        )
-        
-        test_dataloader = DataLoader(
-            test_dataset,
-            batch_size=grpo_config.get('test_batch_size', 8),
-            shuffle=False,
-            collate_fn=test_data_collator
-        )
-        
-        test_dataloader = accelerator.prepare(test_dataloader)
-        
-        test_metrics = evaluate_model_with_constrained_beam_search(
-            model=model,
-            eval_dataloader=test_dataloader,
-            accelerator=accelerator,
-            tokenizer=tokenizer,
-            k_list=grpo_config.get("k_list", [1, 5, 10]),
-            num_beams=grpo_config.get("num_beams", 10),
-            max_gen_length=grpo_config.get("max_gen_length", 5),
-            logger=logger,
-            mode="GRPO Test"
-        )
         
         # 保存最终模型（使用 Hugging Face 格式）
         if accelerator.is_main_process:
@@ -656,38 +468,40 @@ def main(cfg: DictConfig):
     elif accelerator.is_main_process:
         logger.info("跳过tokenizer训练阶段")
     
-    # Stage 2: 预训练模型
-    pretrained_model_dir = None  # 改为目录路径
-    if not cfg.skip_model and success:
-        model_config = OmegaConf.to_container(cfg.model, resolve=True)
-        model_config['device'] = device
-        model_config['dataset_name'] = cfg.dataset
-        # 注意：这里不再需要 model_save_path，Trainer 会自动保存到 output_dir
-        model_config['checkpoint_dir'] = output_dirs['checkpoints']
+    # # Stage 2: 预训练模型
+    # pretrained_model_dir = None  # 改为目录路径
+    # if not cfg.skip_model and success:
+    #     model_config = OmegaConf.to_container(cfg.model, resolve=True)
+    #     model_config['device'] = device
+    #     model_config['dataset_name'] = cfg.dataset
+    #     # 注意：这里不再需要 model_save_path，Trainer 会自动保存到 output_dir
+    #     model_config['checkpoint_dir'] = output_dirs['checkpoints']
         
-        model_success = stage2_train_generation_model(
-            model_config, rqvae_config, output_dirs, accelerator,
-            force_retrain=cfg.force_retrain_model, logger=logger
-        )
-        success = success and model_success
+    #     model_success = stage2_train_generation_model(
+    #         model_config, rqvae_config, output_dirs, accelerator,
+    #         force_retrain=cfg.force_retrain_model, logger=logger
+    #     )
+    #     success = success and model_success
         
-        if model_success:
-            # Trainer 保存的模型在 output_dirs['model'] 目录下
-            pretrained_model_dir = output_dirs['model']
+    #     if model_success:
+    #         # Trainer 保存的模型在 output_dirs['model'] 目录下
+    #         pretrained_model_dir = output_dirs['model']
             
-            if accelerator.is_main_process:
-                logger.info(f"预训练模型保存在: {pretrained_model_dir}")
-                
-    elif cfg.skip_model and accelerator.is_main_process:
-        logger.info("跳过生成模型训练阶段")
-        # 如果跳过训练，使用已有的模型目录
-        pretrained_model_dir = output_dirs['model']
-        
-        # 检查模型是否存在
-        if not os.path.exists(os.path.join(pretrained_model_dir, 'config.json')):
-            logger.error(f"错误: 找不到预训练模型: {pretrained_model_dir}")
-            logger.error("请先运行 Stage 2 或设置正确的模型路径")
-            pretrained_model_dir = None
+    #         if accelerator.is_main_process:
+    #             logger.info(f"预训练模型保存在: {pretrained_model_dir}")
+    # elif cfg.skip_model and accelerator.is_main_process:
+    #     logger.info("跳过生成模型训练阶段")
+    #     # 如果跳过训练，使用已有的模型目录
+    #     pretrained_model_dir = output_dirs['model']
+    #     print(pretrained_model_dir)
+    #     input()
+    #     # 检查模型是否存在
+    #     if not os.path.exists(os.path.join(pretrained_model_dir, 'config.json')):
+    #         logger.error(f"错误: 找不到预训练模型: {pretrained_model_dir}")
+    #         logger.error("请先运行 Stage 2 或设置正确的模型路径")
+    #         pretrained_model_dir = None
+    if cfg.post_training.pretrained_model_path is not None:
+        pretrained_model_dir = cfg.post_training.pretrained_model_path
     
     # Stage 3: GRPO 训练
     if not cfg.get('skip_grpo', False) and success and pretrained_model_dir:

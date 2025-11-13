@@ -215,12 +215,12 @@ class GRPOTrainerForGenRec(Trainer):
         """
         device = self.accelerator.device
         
-        # Get encoder inputs
-        encoder_input_ids = inputs["input_ids"].to(device)
+        # Get encoder inputs, Notice that, as we use the Repeat Sampler, the sampled items woule be repeated with num_generation times.
+        encoder_input_ids = inputs["input_ids"].to(device)          
         encoder_attention_mask = inputs["attention_mask"].to(device)
         target_labels = inputs["labels"].to(device)
         
-        batch_size = encoder_input_ids.size(0)
+        batch_size = encoder_input_ids.size(0)          # Notice that, this batch size is  batch_size, not batch_size * num_generations
         num_beams = self.num_generations
 
         
@@ -241,6 +241,15 @@ class GRPOTrainerForGenRec(Trainer):
                 prefix_allowed_tokens_fn=self.prefix_allowed_fn,  # 使用包装后的函数
             )
 
+        # outputs = {
+        #     "sequences":            [], # generated sequences   [B * num_beams, gen_len]
+        #     "sequences_scores":     [], # log_probs             [B * num_beams, 1      ]
+        #     "tensor":               [], # 打印print出来看到的都是 -inf, 好奇怪，为什么? Answer, 其大小为 [B * num_generations, vocab_size], 即词表的概率
+        #     "logits":               None,
+        #     "beam_indices":         [], #                       [B * num_beams, gen_len]
+        # }
+        # print(outputs)
+        # input()
         
         generated_ids = outputs.sequences  # (B * num_beams, gen_len)
 
@@ -253,9 +262,7 @@ class GRPOTrainerForGenRec(Trainer):
         # completion_mask 用来帮助确定哪些token是需要进行 sft 的
         
         # 生成的 response 需要分 group, 然后来计算 group advantage
-        
-        
-        
+
         # Compute rewards
         generated_items = []
         target_items = []
@@ -274,19 +281,23 @@ class GRPOTrainerForGenRec(Trainer):
 
         
         # Compute rewards using reward function
-        rewards = self.reward_func(generated_items, target_items)
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
+        rewards = self.reward_func(generated_items, target_items)                   # [B * num_generations, 1]
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=device)         # [B * num_generations, 1]
         
         # Gather rewards across all processes
         rewards = gather(rewards)
-
+        
         # Compute grouped-wise rewards (normalize within each group)
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)   # [B, num_generations] -> [B]
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)     # [B, num_generations] -> [B]
+
 
         # Normalize the rewards to compute advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)  # [1,2,3] -> [1,1,2,2,3,3]
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)    # [1,2,3] -> [1,1,2,2,3,3]
+        
+        # The core of grpo algorithm
+        # 但是这个 constant 疑似有点过大了
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
         
@@ -298,11 +309,14 @@ class GRPOTrainerForGenRec(Trainer):
         advantages = advantages[process_slice]
         sliced_rewards = rewards[process_slice]
         
+
         # Compute reference model log probabilities
         with torch.no_grad():
             # Repeat encoder inputs for all generations
             encoder_input_ids_expanded = encoder_input_ids.repeat_interleave(num_beams, dim=0)
             encoder_attention_mask_expanded = encoder_attention_mask.repeat_interleave(num_beams, dim=0)
+            # i can get what this does mean
+
             
             ref_outputs = self.ref_model(
                 input_ids=encoder_input_ids_expanded,
@@ -313,8 +327,8 @@ class GRPOTrainerForGenRec(Trainer):
             ref_logits = ref_outputs.logits  # (B * num_beams, gen_len, vocab_size)
             
             # Compute log probabilities
-            ref_logits = ref_logits[:, :-1, :]  # Exclude last logit
-            generated_ids_for_logp = generated_ids[:, 1:]  # Exclude first token (decoder_start_token)
+            ref_logits = ref_logits[:, :-1, :]              # Exclude last logit
+            generated_ids_for_logp = generated_ids[:, 1:]   # Exclude first token (decoder_start_token)
             
             # Compute log softmax
             ref_log_probs = torch.nn.functional.log_softmax(ref_logits, dim=-1)
@@ -384,7 +398,9 @@ class GRPOTrainerForGenRec(Trainer):
             dim=2,
             index=decoder_input_ids_for_logp.unsqueeze(-1)
         ).squeeze(-1)  # (B * num_beams, gen_len - 1)
-        
+
+        # per_token_logps (B * num_beams, gen_len - 1)
+
         # Compute KL divergence
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
         

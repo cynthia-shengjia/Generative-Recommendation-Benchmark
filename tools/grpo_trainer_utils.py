@@ -134,7 +134,7 @@ def setup_grpo_training(
         save_strategy="epoch",
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="reward",  # 使用 reward 作为最佳模型指标
+        metric_for_best_model="eval_loss",  # 使用 eval_loss 作为最佳模型指标
         greater_is_better=True,
         
         # 日志

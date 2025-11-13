@@ -1,0 +1,7 @@
+{
+    "post_training.pretrained_model_path":  {"_type": "choice", "_value": ["/home/zsj/pretrained-models/ToysAndGames/generation_model"]},
+    "post_training.num_generations":        {"_type": "choice", "_value": [4,8]},
+    "post_training.learning_rate":          {"_type": "choice", "_value": [1e-4,2e-4,3e-4,4e-4,5e-4,6e-4,7e-4,8e-4,9e-4,1e-3,2e-3]},
+    "post_training.weight_decay":           {"_type": "choice", "_value": [0.1,0.2,0.6,0.7,0.01,0.001]},
+    "post_training.num_epochs":             {"_type": "choice", "_value": [1,2,3,4,5]}
+}
