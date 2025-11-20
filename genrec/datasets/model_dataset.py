@@ -5,6 +5,7 @@ import torch
 from typing import Callable, Optional, Dict, List, Any, Tuple, Union
 from genrec.tokenizers.GRTokenizer import AbstractTokenizer
 import logging
+import random
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 class SeqModelTrainingDataset(Dataset):
@@ -39,6 +40,11 @@ class SeqModelTrainingDataset(Dataset):
         self.user_seqs = self._load_user_seqs()
         self.user_ids = list(self.user_seqs.keys())
         
+        # 新增：获取所有物品ID（用于负采样）
+        if self.mode == 'offline-rl': 
+            self.all_items = self._get_all_items()
+            self.neg_num   = 4
+
         # 计算每个物品的token数量（假设所有物品相同）
         self.tokens_per_item = self._get_tokens_per_item()
         self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
@@ -139,6 +145,23 @@ class SeqModelTrainingDataset(Dataset):
             user_seqs[user_id] = item_seq
         return user_seqs
     
+
+    def _get_all_items(self) -> List[int]:
+        """获取所有物品ID"""
+        all_items = set()
+        for item_seq in self.user_seqs.values():
+            all_items.update(item_seq)
+        
+        # 方法1: 使用实际出现的物品ID
+        all_items_list = sorted(list(all_items))
+        
+        # 方法2: 如果你想使用 [0, max_item_id] 的连续范围
+        # max_item_id = max(all_items) if all_items else 0
+        # all_items_list = list(range(max_item_id + 1))
+        
+        return all_items_list
+
+
     def _get_tokens_per_item(self) -> int:
         """获取每个物品的token数量（假设所有物品相同）"""
         if not self.tokenizer.item2tokens:
@@ -165,6 +188,29 @@ class SeqModelTrainingDataset(Dataset):
                         'history_items': history,
                         'target_item': target
                     })
+            elif self.mode == 'offline-rl':
+                item_seq = item_seq[:-2]
+                for i in range(1, len(item_seq)):
+                    history = item_seq[:i]
+                    target = item_seq[i]
+                    
+                    if len(history) > max_item_seq_len:
+                        history = history[-max_item_seq_len:]
+                    
+                    user_interacted     = set(item_seq[:i+1])
+                    candidate_negatives = [item for item in self.all_items if item not in user_interacted] 
+                    negative_items = random.sample(
+                        candidate_negatives, 
+                        self.neg_num
+                    )
+                    
+                    samples.append({
+                        'user_id': user_id,
+                        'history_items': history,
+                        'target_item': target,
+                        'negative_items': negative_items,  # 新增负样本
+                    })
+        
             elif self.mode == 'merge_train':
                 # 训练集需要截断倒数的两个item (倒数第二个item作为valid，倒数第一个item作为test)
                 item_seq = item_seq[:-1]
@@ -229,10 +275,27 @@ class SeqModelTrainingDataset(Dataset):
         else:
             target_tokens = [0] * self.tokens_per_item
 
-        return {
+        result = {
             'user_token':    self.tokenizer.get_user_token(user_id),
             'source_tokens': source_tokens,
             'target_tokens': target_tokens,
             "target_id":     target_item,
             # "single_sample_loss_mask": self.precomputed_loss_mask,
         }
+
+        if self.mode == "offline-rl":
+            negative_items = sample['negative_items']
+            
+            rejected_tokens = {}
+            
+
+            for i, negative_item in enumerate(negative_items):
+                if negative_item in self.tokenizer.item2tokens:
+                    target_negative_tokens = self.tokenizer.item2tokens[negative_item]
+                else:
+                    target_negative_tokens = [0] * self.tokens_per_item
+                rejected_tokens[i] = target_negative_tokens          
+            
+            result['rejected_tokens'] = rejected_tokens
+
+        return result
