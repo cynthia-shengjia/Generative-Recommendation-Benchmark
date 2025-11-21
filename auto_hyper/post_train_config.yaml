@@ -4,7 +4,7 @@ max_trial_number: 300
 
 searchSpaceFile: post_train_search_space.json
 
-trialCommand: python train_with_rl.py dataset="ToysAndGames" output_dir="/home/zsj/pretrained-models/ToysAndGames" tokenizer.data_text_files="./data/ToysAndGames/item2title.pkl"  tokenizer.interaction_files="./data/ToysAndGames/user2item.pkl"  model.data_interaction_files="./data/ToysAndGames/user2item.pkl"   model.data_text_files="./data/ToysAndGames/item2title.pkl"  skip_model=True 
+trialCommand: python train_with_rl.py dataset="Beauty" output_dir="/home/zsj/pretrained-models/Beauty"  post_training.pretrained_model_path="/home/zsj/pretrained-models/Beauty/generation_model"  tokenizer.data_text_files="./data/Beauty/item2title.pkl"  tokenizer.interaction_files="./data/Beauty/user2item.pkl"  model.data_interaction_files="./data/Beauty/user2item.pkl"   model.data_text_files="./data/Beauty/item2title.pkl"  skip_model=True 
 
 trialCodeDirectory: ..
 

@@ -14,3 +14,5 @@
 /output/
 /data/
 /predictions.json
+/auto_hyper/
+/data/
