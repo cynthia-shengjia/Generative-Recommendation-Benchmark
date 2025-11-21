@@ -71,8 +71,8 @@ class TigerDataCollator(BaseSeqRecDataCollator):
                 result = self.process_decoder_target(target_tokens)
                 transformed_target = result["labels"]
                 
-                # 添加 EOS token
-                transformed_target.append(self.eos_token_id)
+                # 添加 EOS token Note that, base_collator already add
+                # transformed_target.append(self.eos_token_id)
                 
                 labels_list.append(transformed_target)  
                 unpadded_lengths.append(len(transformed_target))
