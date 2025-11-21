@@ -1,4 +1,0 @@
-{
-    "tokenizer.learning_rate": {"_type": "choice", "_value": [1e-4, 5e-4, 1e-3, 5e-3]},
-    "tokenizer.dropout_prob": {"_type": "choice", "_value": [0]}
-}

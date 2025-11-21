@@ -1,8 +1,0 @@
-{
-    "model.learning_rate": {"_type": "choice", "_value": [1e-3,2e-3,3e-3,4e-3]},
-    "model.dropout_rate": {"_type": "choice", "_value": [0.1,0.2,0.3]},
-    "model.batch_size": {"_type": "choice", "_value": [1024]},
-    "model.weight_decay": {"_type": "choice", "_value": [0.1,0.2,0.3]},
-    "model.num_epochs": {"_type": "choice", "_value": [100]},
-    "output_dir": {"_type": "choice", "_value": ["/home/zsj/pretrained-models/Sports"]}
-}
