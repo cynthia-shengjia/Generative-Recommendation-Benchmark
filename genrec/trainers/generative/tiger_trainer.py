@@ -53,8 +53,8 @@ class GenerativeTrainer(Trainer):
         }
         if self.prefix_allowed_fn:
             gen_kwargs["prefix_allowed_tokens_fn"] = self.prefix_allowed_fn
-
-        generated_sequences = model.generate(
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        generated_sequences = unwrapped_model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             **gen_kwargs,
