@@ -3,12 +3,14 @@ from typing import Dict, List, Any
 import torch
 from ..base_collator import BaseSeqRecDataCollator
 
+
+
 @dataclass
 class SDPODataCollator(BaseSeqRecDataCollator):
     """SDPO (Offline RL) DataCollator"""
-    max_seq_len: int  
-    pad_token_id: int  
-    eos_token_id: int  
+    max_seq_len: int  = 100
+    pad_token_id: int  = 1
+    eos_token_id: int  = 1
     mode: str = "train"  # 'train', 'valid', 'test'
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         """

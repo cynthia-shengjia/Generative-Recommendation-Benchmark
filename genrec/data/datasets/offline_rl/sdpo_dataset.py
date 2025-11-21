@@ -5,9 +5,9 @@ from ..base_dataset import BaseSeqRecDataset
 class SDPODataset(BaseSeqRecDataset):
     """SDPO (Offline RL) 数据集"""
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, neg_num, *args, **kwargs):
         # 在初始化前设置负采样相关属性
-        self.neg_num = 4
+        self.neg_num = neg_num
         super().__init__(*args, **kwargs)
 
     def _create_samples(self) -> List[Dict[str, Any]]:

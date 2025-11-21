@@ -230,7 +230,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             traceback.print_exc()
         return False
 
-@hydra.main(version_base=None, config_path="config", config_name="config")
+@hydra.main(version_base=None, config_path="config", config_name="generative")
 def main(cfg: DictConfig):
     """主函数"""
     seed = getattr(cfg, 'seed', 42) 

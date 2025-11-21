@@ -77,7 +77,15 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain:
         traceback.print_exc()
         return False
 
-def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accelerator, logger, force_retrain=False):
+def stage2_train_generation_model(
+    model_config, 
+    rqvae_config, 
+    offline_rl_config,
+    output_dirs, 
+    accelerator, 
+    logger, 
+    force_retrain=False
+):
     """阶段2: 训练生成模型（使用约束beam search进行评估）"""
     if accelerator.is_main_process:
         logger.info("\n" + "="*60)
@@ -127,17 +135,20 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
         train_dataset = SDPODataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer, config=model_config, mode='train'
+            tokenizer=tokenizer, config=model_config, mode='train',
+            neg_num = offline_rl_config.get("neg_num")
         )
         valid_dataset = SDPODataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer, config=model_config, mode='valid'
+            tokenizer=tokenizer, config=model_config, mode='valid',
+            neg_num = offline_rl_config.get("neg_num")
         )
         test_dataset = SDPODataset(
             data_interaction_files=model_config['data_interaction_files'],
             data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer, config=model_config, mode='test'
+            tokenizer=tokenizer, config=model_config, mode='test',
+            neg_num = offline_rl_config.get("neg_num")
         )
 
 
@@ -186,6 +197,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             train_dataset,
             valid_dataset,
             model_config,
+            offline_rl_config,
             output_dirs,
             logger,
             per_device_train_batch_size=per_device_train_batch_size,
@@ -228,7 +240,7 @@ def stage2_train_generation_model(model_config, rqvae_config, output_dirs, accel
             traceback.print_exc()
         return False
 
-@hydra.main(version_base=None, config_path="config", config_name="config")
+@hydra.main(version_base=None, config_path="config", config_name="offline_rl")
 def main(cfg: DictConfig):
     """主函数"""
     seed = getattr(cfg, 'seed', 42) 
@@ -283,10 +295,17 @@ def main(cfg: DictConfig):
         model_config['dataset_name'] = cfg.dataset
         model_config['model_save_path'] = os.path.join(output_dirs['model'], f"{cfg.dataset}_final_model.pt")
         model_config['checkpoint_dir'] = output_dirs['checkpoints']
+
+        offline_rl_config = OmegaConf.to_container(cfg.offline_rl, resolve=True)
         
         model_success = stage2_train_generation_model(
-            model_config, rqvae_config, output_dirs, accelerator,
-            force_retrain=cfg.force_retrain_model,logger=logger
+            model_config, 
+            rqvae_config, 
+            offline_rl_config,
+            output_dirs, 
+            accelerator,
+            force_retrain=cfg.force_retrain_model,
+            logger=logger
         )
         success = success and model_success
     elif cfg.skip_model and accelerator.is_main_process:

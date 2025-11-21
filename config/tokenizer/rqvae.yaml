@@ -1,6 +1,6 @@
 # RQ-VAE配置
 data_text_files: "./data/ToysAndGames/item2title.pkl"
-text_encoder_model: "/home/zsj/huggingface-models/sentence-t5-base/sentence-t5-base"
+text_encoder_model: "/home/zsj/huggingface-models/sentence-t5-base"
 interaction_files: "./data/ToysAndGames/user2item.pkl"
 sent_emb_dim: 768
 n_codebooks: 3
