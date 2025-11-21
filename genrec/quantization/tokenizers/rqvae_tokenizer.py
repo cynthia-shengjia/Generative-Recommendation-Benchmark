@@ -149,7 +149,8 @@ class RQVAETokenizer(AbstractTokenizer, nn.Module):
                 loaded_user_data = json.load(f)
                 self.user2tokens = {int(k): v for k, v in loaded_user_data.items()}
                 self.log(f'[TOKENIZER] Loaded {len(self.item2tokens)} items and {len(self.user2tokens)} users.')
-                self.user_token_start_idx = len(self.item2tokens) + self.reserve_tokens
+                min_user_token = min(self.user2tokens.values())
+                self.user_token_start_idx = min_user_token
             return
         self.log(f'[TOKENIZER] Cache file not found. Starting full tokenization process...')
         item_ids, sent_embs = item_embeddings_data
