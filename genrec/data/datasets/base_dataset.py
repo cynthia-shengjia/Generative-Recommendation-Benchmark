@@ -52,7 +52,7 @@ class BaseSeqRecDataset(Dataset):
         self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
         
         # 创建样本
-        self.all_items = self._get_all_items() # 会被重复运行很多很多次
+        self.all_items = self._get_all_items()
         self.samples = self._create_samples()
     
     def _get_all_items(self) -> List[int]:
