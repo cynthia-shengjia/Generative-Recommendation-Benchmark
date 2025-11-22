@@ -32,23 +32,13 @@ class TigerDataCollator(BaseSeqRecDataCollator):
                 'label_id': List[int],  # test 模式（valid 模式也可能需要）
             }  
         """  
-          
         # 处理 Encoder 输入  
         input_ids_list = []  
         for feature in features:  
             source_tokens = feature["source_tokens"]
-            
             # 应用偏移到源序列（如果 process_encoder_input 有偏移逻辑）
             result = self.process_encoder_input(source_tokens)
             transformed_source = result["input_ids"]
-            
-            # 截断或填充源序列
-            if len(transformed_source) > self.max_seq_len:
-                transformed_source = transformed_source[-self.max_seq_len:]
-            else:
-                padding_length = self.max_seq_len - len(transformed_source)
-                transformed_source = [self.pad_token_id] * padding_length + transformed_source
-            
             input_ids_list.append(transformed_source)
         
         # 构建基础 batch
@@ -70,9 +60,6 @@ class TigerDataCollator(BaseSeqRecDataCollator):
                 # 应用偏移到目标序列
                 result = self.process_decoder_target(target_tokens)
                 transformed_target = result["labels"]
-                
-                # 添加 EOS token Note that, base_collator already add
-                # transformed_target.append(self.eos_token_id)
                 
                 labels_list.append(transformed_target)  
                 unpadded_lengths.append(len(transformed_target))
