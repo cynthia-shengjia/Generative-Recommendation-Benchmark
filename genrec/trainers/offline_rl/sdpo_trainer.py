@@ -27,7 +27,6 @@ class SDPOTrainer(Trainer):
         padding_value: int = 0,  
         train_dataset: Optional[Dataset] = None,  
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,  
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,  
         model_init: Optional[Callable[[], PreTrainedModel]] = None,  
         callbacks: Optional[List[TrainerCallback]] = None,  
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),  
@@ -67,7 +66,6 @@ class SDPOTrainer(Trainer):
             data_collator=data_collator,  
             train_dataset=train_dataset,  
             eval_dataset=eval_dataset,  
-            tokenizer=tokenizer,  
             model_init=model_init,  
             compute_metrics=compute_metrics,  # 🔴 传递给父类
             callbacks=callbacks,  

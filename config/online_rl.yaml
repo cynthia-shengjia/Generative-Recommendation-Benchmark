@@ -10,5 +10,4 @@ cuda: "0"
 force_retrain_tokenizer: false
 force_retrain_model: false
 skip_tokenizer: true
-skip_model: true
-skip_grpo: false  # 新增：控制是否跳过 GRPO 训练
+skip_model: false

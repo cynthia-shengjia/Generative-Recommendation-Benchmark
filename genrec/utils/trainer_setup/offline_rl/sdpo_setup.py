@@ -67,7 +67,6 @@ def create_trainer(
         data_collator=data_collator,  
         eval_data_collator=eval_data_collator,  
         callbacks=callbacks,  
-        # 🔴 生成评估参数  
         compute_metrics=compute_metrics,  
         generation_params=generation_params,  
         item2tokens=item2tokens,  

@@ -25,4 +25,4 @@ max_gen_length: 5
 weight_decay: 0.2
 warmup_ratio: 0.05
 early_stop_upper_steps: 5
-evaluation_epoch: 5
+evaluation_epoch: 1

@@ -1,4 +1,4 @@
 beta: 1e-3
 neg_num: 4
-pretrained_model: "/home/zsj/pretrained-models/Beauty-Official/generation_model"
+pretrained_model: 
 save_model_path:  "/home/zsj/pretrained-models/Beauty-PostTrain-Test"

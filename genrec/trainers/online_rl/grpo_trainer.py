@@ -1,30 +1,22 @@
-import os
-import math
-import warnings
+
 from collections import defaultdict
 from typing import Any, Callable, Optional, Sized, Union, Dict, List, Tuple
-from dataclasses import dataclass
+
+import torch.nn as nn    
 
 import torch
-import torch.nn as nn
 import torch.utils.data
 from torch.utils.data import Sampler
-from accelerate.utils import gather, gather_object, set_seed
+from accelerate.utils import gather
 from transformers import (
     Trainer,
     TrainerCallback,
     T5ForConditionalGeneration,
-    T5Config,
-    is_wandb_available,
 )
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
-from trl import GRPOConfig
-from trl.trainer.utils import pad
-from genrec.cbs_structure.generate_trie import Trie,prefix_allowed_tokens_fn
+from transformers import PreTrainedModel, Trainer    
+from genrec.generation.trie import Trie,prefix_allowed_tokens_fn
 
-if is_wandb_available():
-    import wandb
 
 class RepeatRandomSampler(Sampler):
     """
@@ -53,7 +45,7 @@ class RepeatRandomSampler(Sampler):
         return self.num_samples * self.repeat_count
 
 
-class GRPOTrainerForGenRec(Trainer):
+class GRPOTrainer(Trainer):
     """
     GRPO Trainer for Generative Recommendation with Encoder-Decoder models.
     """
@@ -63,63 +55,56 @@ class GRPOTrainerForGenRec(Trainer):
     def __init__(
         self,
         model: T5ForConditionalGeneration,
-        tokenizer,  # 添加 tokenizer 参数
-        args: GRPOConfig = None,
+        ref_model,
+        beta,
+        num_generations,
+        args = None,
         train_dataset=None,
         eval_dataset=None,
         data_collator=None,
-        reward_func: Optional[Callable] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        compute_metrics: Optional[Callable] = None,  
+        generation_params: Optional[Dict] = None,  
+        reward_func: Optional[Callable] = None,
+        item2tokens: Optional[Dict] = None,  
+        tokens2item: Optional[Dict] = None,  
+        pad_token_id: Optional[int] = None,  
+        eos_token_id: Optional[int] = None, 
         optimizers: Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
     ):
-        # Args
-        if args is None:
-            model_name = model.config._name_or_path if hasattr(model.config, '_name_or_path') else "t5-genrec"
-            args = GRPOConfig(f"{model_name}-GRPO")
-        
-        # Store tokenizer
-        self.tokenizer = tokenizer
         
         # Get item2tokens from tokenizer
-        self.item2tokens = tokenizer.item2tokens
+        self.item2tokens = item2tokens
+        self.tokens2item = tokens2item
         
-        # Create reverse mapping: tokens -> item
-        self.tokens2item = tokenizer.tokens2item
         
         # Build Trie for constrained generation
         self.candidate_trie = Trie(self.item2tokens)
         self.prefix_allowed_fn = prefix_allowed_tokens_fn(self.candidate_trie)
         
         # Training arguments
-        self.max_seq_len = args.max_prompt_length if args.max_prompt_length else 512
-        self.max_completion_length = args.max_completion_length
-        self.num_generations = args.num_generations
-        self.beta = args.beta
-        self.pad_token_id = tokenizer.pad_token
-        self.eos_token_id = tokenizer.eos_token
-        self.decoder_start_token_id = model.config.decoder_start_token_id
+
         
+        self.num_generations = num_generations
+        
+        self.beta = beta
+        self.pad_token_id = pad_token_id
+        self.eos_token_id = eos_token_id
+        self.decoder_start_token_id = model.config.decoder_start_token_id
+        self.generation_params = generation_params or {}  
+        self.max_completion_length = self.generation_params.get('max_gen_length',5)
+
         # Reward function
         self.reward_func = reward_func if reward_func else self._default_reward_func
         
-        # Create reference model
-        self.ref_model = self._create_reference_model(model)
+
+        self.ref_model = ref_model
         
         # Initialize metrics
         self._metrics = defaultdict(list)
         self.log_completions = args.log_completions if hasattr(args, 'log_completions') else False
         self.add_gt = True
         
-        # Data collator - 使用你的 TrainSeqRecDataCollator
-        if data_collator is None:
-            from genrec.datasets.data_collator import TrainSeqRecDataCollator
-            tokens_per_item = len(next(iter(self.item2tokens.values())))
-            data_collator = TrainSeqRecDataCollator(
-                max_seq_len=self.max_seq_len,
-                pad_token_id=self.pad_token_id,
-                eos_token_id=self.eos_token_id,
-                tokens_per_item=tokens_per_item
-            )
         
         super().__init__(
             model=model,
@@ -129,19 +114,16 @@ class GRPOTrainerForGenRec(Trainer):
             eval_dataset=eval_dataset,
             callbacks=callbacks,
             optimizers=optimizers,
+            compute_metrics=compute_metrics
         )
-        
-        # Set unique seed for each process
-        set_seed(args.seed, device_specific=True)
-        
-        # Prepare reference model
-        if self.ref_model is not None:
-            if self.is_deepspeed_enabled:
-                from trl.models import prepare_deepspeed
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
-            else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        
+                
+
+        if hasattr(self, "accelerator"):  
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)  
+        else:  
+            raise AttributeError("Trainer does not have an accelerator object")  
+      
+
         # Validation
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes
@@ -153,17 +135,6 @@ class GRPOTrainerForGenRec(Trainer):
                 f"batch size, the valid values for the number of generations are: {possible_values}."
             )
 
-    def _create_reference_model(self, model):
-        """Create a reference model for KL divergence computation."""
-        if is_deepspeed_zero3_enabled():
-            # Create a new model instance
-            ref_model = T5ForConditionalGeneration(model.config)
-            ref_model.load_state_dict(model.state_dict())
-        else:
-            # Create reference model using TRL's utility
-            from trl.models import create_reference_model
-            ref_model = create_reference_model(model)
-        return ref_model
 
     def _default_reward_func(self, generated_items: List[int], target_items: List[int]) -> List[float]:
         """
@@ -181,19 +152,6 @@ class GRPOTrainerForGenRec(Trainer):
             rewards.append(1.0 if gen_item == target_item else 0.0)
         return rewards
 
-    def _set_signature_columns_if_needed(self):
-        if self._signature_columns is None:
-            # Expected columns from dataset
-            self._signature_columns = ["input_ids", "attention_mask", "labels"]
-
-    def _get_train_sampler(self, train_dataset=None) -> Sampler:
-        if train_dataset is None:
-            train_dataset = self.train_dataset
-        return RepeatRandomSampler(train_dataset, self.num_generations, seed=self.args.seed)
-
-    def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
-
     def _tokens_to_item(self, token_list: List[int]) -> Optional[int]:
         """Convert a list of tokens to item ID."""
         # Remove padding and special tokens
@@ -202,245 +160,190 @@ class GRPOTrainerForGenRec(Trainer):
         return self.tokens2item.get(tokens_tuple, None)
     
     def _prepare_inputs(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-            """
-            Prepare inputs for GRPO training with optional GT injection.
-            
-            This method:
-            1. Takes encoder inputs (history items)
-            2. Generates multiple completions using beam search
-            3. Optionally adds GT samples
-            4. Computes rewards
-            5. Computes reference model log probabilities
-            """
-            device = self.accelerator.device
-            
-            # Get encoder inputs, Notice that, as we use the Repeat Sampler, the sampled items would be repeated with num_generation times.
-            encoder_input_ids = inputs["input_ids"].to(device)
-            encoder_attention_mask = inputs["attention_mask"].to(device)
-            target_labels = inputs["labels"].to(device)
-            
-            batch_size = encoder_input_ids.size(0)  # Notice that, this batch size is batch_size, not batch_size * num_generations
-            num_beams = self.num_generations
-            
-            # Calculate how many samples to generate vs how many GT to add
-            if self.add_gt:
-                num_gt_per_sample = 1
-                num_generated = num_beams - num_gt_per_sample  # 剩余的通过生成获得
-            else:
-                num_gt_per_sample = 0
-                num_generated = num_beams
-            
-            # ========== Part 1: Generate completions using beam search with Trie constraint ==========
-            if num_generated > 0:
-                with torch.no_grad():
-                    outputs = self.model.generate(
-                        input_ids=encoder_input_ids,
-                        attention_mask=encoder_attention_mask,
-                        max_length=self.max_completion_length,
-                        num_beams=num_generated,
-                        num_return_sequences=num_generated,
-                        early_stopping=True,
-                        pad_token_id=self.pad_token_id,
-                        eos_token_id=self.eos_token_id,
-                        decoder_start_token_id=self.decoder_start_token_id,
-                        output_scores=True,
-                        return_dict_in_generate=True,
-                        prefix_allowed_tokens_fn=self.prefix_allowed_fn,  # 使用包装后的函数
-                    )
-                
-                generated_ids = outputs.sequences  # (B * num_generated, gen_len)
-            else:
-                generated_ids = None
-            
-            # ========== Part 2: Add GT samples (优化版本) ==========
-            if self.add_gt and num_gt_per_sample > 0:
-                # 直接在 GPU 上操作，避免 CPU-GPU 传输
-                # target_labels: (B, target_len)
-                
-                # 方法1: 如果 target_labels 已经包含 decoder_start_token_id，直接使用
-                # 方法2: 如果需要添加 decoder_start_token_id，使用向量化操作
-                
-                # 检查是否需要添加 decoder_start_token_id
-                # 假设 target_labels 的第一个非 pad token 应该是 decoder_start_token_id
-                # 如果不是，我们需要添加
-                
-                # 为了简化和加速，假设 target_labels 格式正确，直接重复
-                # gt_decoder_ids: (B, target_len) -> (B * num_gt_per_sample, target_len)
-                gt_decoder_ids = target_labels.repeat_interleave(num_gt_per_sample, dim=0)
-                # 现在 gt_decoder_ids 是 (B * num_gt_per_sample, target_len)
-            
-            # ========== Part 3: Merge generated samples and GT samples (优化版本) ==========
-            if self.add_gt and num_gt_per_sample > 0:
-                if generated_ids is not None:
-                    # 需要将生成的样本和 GT 样本交错排列
-                    # generated_ids: (B * num_generated, gen_len)
-                    # gt_decoder_ids: (B * num_gt_per_sample, target_len)
-                    
-                    # 首先，pad 到相同长度
-                    max_len = max(generated_ids.size(1), gt_decoder_ids.size(1))
-                    
-                    if generated_ids.size(1) < max_len:
-                        padding = torch.full(
-                            (generated_ids.size(0), max_len - generated_ids.size(1)),
-                            self.pad_token_id,
-                            dtype=generated_ids.dtype,
-                            device=device
-                        )
-                        generated_ids = torch.cat([generated_ids, padding], dim=1)
-                    
-                    if gt_decoder_ids.size(1) < max_len:
-                        padding = torch.full(
-                            (gt_decoder_ids.size(0), max_len - gt_decoder_ids.size(1)),
-                            self.pad_token_id,
-                            dtype=gt_decoder_ids.dtype,
-                            device=device
-                        )
-                        gt_decoder_ids = torch.cat([gt_decoder_ids, padding], dim=1)
-                    
-                    # 现在两者都是 (*, max_len)
-                    # 重新组织：每个样本的 num_generated 个生成结果 + num_gt_per_sample 个 GT
-                    # 使用 reshape 和 cat 来高效实现
-                    
-                    # generated_ids: (B * num_generated, max_len) -> (B, num_generated, max_len)
-                    generated_ids_reshaped = generated_ids.view(batch_size, num_generated, max_len)
-                    # gt_decoder_ids: (B * num_gt_per_sample, max_len) -> (B, num_gt_per_sample, max_len)
-                    gt_decoder_ids_reshaped = gt_decoder_ids.view(batch_size, num_gt_per_sample, max_len)
-                    
-                    # 拼接: (B, num_generated + num_gt_per_sample, max_len)
-                    all_decoder_ids = torch.cat([generated_ids_reshaped, gt_decoder_ids_reshaped], dim=1)
-                    
-                    # 展平: (B * num_beams, max_len)
-                    all_decoder_ids = all_decoder_ids.view(batch_size * num_beams, max_len)
-                else:
-                    all_decoder_ids = gt_decoder_ids
-            else:
-                all_decoder_ids = generated_ids
-            
-            generated_ids = all_decoder_ids  # (B * num_beams, gen_len)
-            
-            # ========== Part 4: Mask everything after the first EOS token ==========
-            is_eos = generated_ids == self.eos_token_id
-            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            # completion_mask 用来帮助确定哪些token是需要进行 sft 的
-            
-            # 生成的 response 需要分 group, 然后来计算 group advantage
-            
-            # ========== Part 5: Compute rewards ==========
-            generated_items = []
-            target_items = []
-            
-            for i in range(generated_ids.size(0)):
-                gen_tokens = generated_ids[i].cpu().tolist()
-                gen_item = self._tokens_to_item(gen_tokens)
-                generated_items.append(gen_item if gen_item is not None else -1)
-                
-                # Get corresponding target item
-                sample_idx = i // num_beams
-                target_tokens = target_labels[sample_idx].cpu().tolist()
-                target_item = self._tokens_to_item(target_tokens)
-                target_items.append(target_item if target_item is not None else -1)
-            
-            # Compute rewards using reward function
-            rewards = self.reward_func(generated_items, target_items)  # [B * num_generations, 1]
-            rewards = torch.tensor(rewards, dtype=torch.float32, device=device)  # [B * num_generations, 1]
-            
-            # Gather rewards across all processes
-            rewards = gather(rewards)
-            
-            # ========== Part 6: Compute grouped-wise rewards (normalize within each group) ==========
-            mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)  # [B, num_generations] -> [B]
-            std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)  # [B, num_generations] -> [B]
-            
-            # Normalize the rewards to compute advantages
-            mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)  # [1,2,3] -> [1,1,2,2,3,3]
-            std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)  # [1,2,3] -> [1,1,2,2,3,3]
-            
-            # The core of grpo algorithm
-            # 但是这个 constant 疑似有点过大了
-            advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
-            # advantages = rewards
-            # print(advantages)
-            # input()
-            
-            # Slice to keep only the local part
-            process_slice = slice(
-                self.accelerator.process_index * batch_size * num_beams,
-                (self.accelerator.process_index + 1) * batch_size * num_beams,
-            )
-            advantages = advantages[process_slice]
-            sliced_rewards = rewards[process_slice]
-            
-            # ========== Part 7: Compute reference model log probabilities ==========
+        """
+        准备输入数据。
+        - 训练时：使用 GRPO 的完整逻辑
+        - 评估时：使用标准的输入准备
+        """
+        # 🔴 关键修改：检查是否在评估模式
+        if not self.model.training:
+            # 评估模式：直接返回标准输入（调用父类方法）
+            return super()._prepare_inputs(inputs)
+        
+        # 训练模式：使用 GRPO 的完整逻辑
+        return self._prepare_inputs_for_grpo(inputs)
+    
+    def _prepare_inputs_for_grpo(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        GRPO 训练专用的输入准备（原来的 _prepare_inputs 逻辑）
+        """
+        device = self.accelerator.device
+        
+        # Get encoder inputs
+        encoder_input_ids = inputs["input_ids"].to(device)
+        encoder_attention_mask = inputs["attention_mask"].to(device)
+        target_labels = inputs["labels"].to(device)
+        
+        batch_size = encoder_input_ids.size(0)
+        num_beams = self.num_generations
+        
+        # Calculate how many samples to generate vs how many GT to add
+        if self.add_gt:
+            num_gt_per_sample = 1
+            num_generated = num_beams - num_gt_per_sample
+        else:
+            num_gt_per_sample = 0
+            num_generated = num_beams
+        
+        # ========== Part 1: Generate completions ==========
+        if num_generated > 0:
             with torch.no_grad():
-                # Repeat encoder inputs for all generations
-                encoder_input_ids_expanded = encoder_input_ids.repeat_interleave(num_beams, dim=0)
-                encoder_attention_mask_expanded = encoder_attention_mask.repeat_interleave(num_beams, dim=0)
-                # i can get what this does mean
-                
-                ref_outputs = self.ref_model(
-                    input_ids=encoder_input_ids_expanded,
-                    attention_mask=encoder_attention_mask_expanded,
-                    decoder_input_ids=generated_ids,
-                    return_dict=True,
+                outputs = self.model.generate(
+                    input_ids=encoder_input_ids,
+                    attention_mask=encoder_attention_mask,
+                    max_length=self.max_completion_length,
+                    num_beams=num_generated,
+                    num_return_sequences=num_generated,
+                    early_stopping=True,
+                    pad_token_id=self.pad_token_id,
+                    eos_token_id=self.eos_token_id,
+                    decoder_start_token_id=self.decoder_start_token_id,
+                    output_scores=True,
+                    return_dict_in_generate=True,
+                    prefix_allowed_tokens_fn=self.prefix_allowed_fn,
                 )
-                ref_logits = ref_outputs.logits  # (B * num_beams, gen_len, vocab_size)
+            generated_ids = outputs.sequences
+        else:
+            generated_ids = None
+        
+        # ========== Part 2: Add GT samples ==========
+        if self.add_gt and num_gt_per_sample > 0:
+            gt_decoder_ids = target_labels.repeat_interleave(num_gt_per_sample, dim=0)
+        
+        # ========== Part 3: Merge generated and GT samples ==========
+        if self.add_gt and num_gt_per_sample > 0:
+            if generated_ids is not None:
+                max_len = max(generated_ids.size(1), gt_decoder_ids.size(1))
                 
-                # Compute log probabilities
-                ref_logits = ref_logits[:, :-1, :]  # Exclude last logit
-                generated_ids_for_logp = generated_ids[:, 1:]  # Exclude first token (decoder_start_token)
+                if generated_ids.size(1) < max_len:
+                    padding = torch.full(
+                        (generated_ids.size(0), max_len - generated_ids.size(1)),
+                        self.pad_token_id,
+                        dtype=generated_ids.dtype,
+                        device=device
+                    )
+                    generated_ids = torch.cat([generated_ids, padding], dim=1)
                 
-                # Compute log softmax
-                ref_log_probs = torch.nn.functional.log_softmax(ref_logits, dim=-1)
+                if gt_decoder_ids.size(1) < max_len:
+                    padding = torch.full(
+                        (gt_decoder_ids.size(0), max_len - gt_decoder_ids.size(1)),
+                        self.pad_token_id,
+                        dtype=gt_decoder_ids.dtype,
+                        device=device
+                    )
+                    gt_decoder_ids = torch.cat([gt_decoder_ids, padding], dim=1)
                 
-                # Gather log probs for generated tokens
-                ref_per_token_logps = torch.gather(
-                    ref_log_probs,
-                    dim=2,
-                    index=generated_ids_for_logp.unsqueeze(-1)
-                ).squeeze(-1)  # (B * num_beams, gen_len - 1)
+                generated_ids_reshaped = generated_ids.view(batch_size, num_generated, max_len)
+                gt_decoder_ids_reshaped = gt_decoder_ids.view(batch_size, num_gt_per_sample, max_len)
+                all_decoder_ids = torch.cat([generated_ids_reshaped, gt_decoder_ids_reshaped], dim=1)
+                all_decoder_ids = all_decoder_ids.view(batch_size * num_beams, max_len)
+            else:
+                all_decoder_ids = gt_decoder_ids
+        else:
+            all_decoder_ids = generated_ids
+        
+        generated_ids = all_decoder_ids
+        
+        # ========== Part 4: Mask after EOS ==========
+        is_eos = generated_ids == self.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        
+        # ========== Part 5: Compute rewards ==========
+        generated_items = []
+        target_items = []
+        
+        for i in range(generated_ids.size(0)):
+            gen_tokens = generated_ids[i].cpu().tolist()
+            gen_item = self._tokens_to_item(gen_tokens)
+            generated_items.append(gen_item if gen_item is not None else -1)
             
-            # ========== Part 8: Log metrics ==========
-            self._metrics["reward"].append(rewards.mean().item())
-            self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
+            sample_idx = i // num_beams
+            target_tokens = target_labels[sample_idx].cpu().tolist()
+            target_item = self._tokens_to_item(target_tokens)
+            target_items.append(target_item if target_item is not None else -1)
+        
+        rewards = self.reward_func(generated_items, target_items, num_generations=self.num_generations)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
+        rewards = gather(rewards)
+        
+        # ========== Part 6: Compute advantages ==========
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        
+        process_slice = slice(
+            self.accelerator.process_index * batch_size * num_beams,
+            (self.accelerator.process_index + 1) * batch_size * num_beams,
+        )
+        advantages = advantages[process_slice]
+        sliced_rewards = rewards[process_slice]
+        
+        # ========== Part 7: Compute reference log probs ==========
+        with torch.no_grad():
+            encoder_input_ids_expanded = encoder_input_ids.repeat_interleave(num_beams, dim=0)
+            encoder_attention_mask_expanded = encoder_attention_mask.repeat_interleave(num_beams, dim=0)
             
-            # Additional metrics for GT samples (优化版本)
-            if self.add_gt and num_gt_per_sample > 0:
-                # GT samples are at the end of each group
-                # 使用向量化操作而不是循环
-                rewards_reshaped = rewards.view(batch_size, num_beams)  # (B, num_beams)
-                
-                # GT rewards: 最后 num_gt_per_sample 列
-                gt_rewards = rewards_reshaped[:, -num_gt_per_sample:].mean()
-                self._metrics["gt_reward"].append(gt_rewards.item())
-                
-                # Generated rewards: 前 num_generated 列
-                if num_generated > 0:
-                    gen_rewards = rewards_reshaped[:, :num_generated].mean()
-                    self._metrics["gen_reward"].append(gen_rewards.item())
+            ref_outputs = self.ref_model(
+                input_ids=encoder_input_ids_expanded,
+                attention_mask=encoder_attention_mask_expanded,
+                decoder_input_ids=generated_ids,
+                return_dict=True,
+            )
+            ref_logits = ref_outputs.logits
+            ref_log_probs = torch.nn.functional.log_softmax(ref_logits, dim=-1)
+            ref_per_token_logps = torch.gather(
+                ref_log_probs,
+                dim=2,
+                index=generated_ids.unsqueeze(-1)
+            ).squeeze(-1)
+        
+        # ========== Part 8: Log metrics ==========
+        self._metrics["reward"].append(rewards.mean().item())
+        self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
+        
+        if self.add_gt and num_gt_per_sample > 0:
+            rewards_reshaped = rewards.view(batch_size, num_beams)
+            gt_rewards = rewards_reshaped[:, -num_gt_per_sample:].mean()
+            self._metrics["gt_reward"].append(gt_rewards.item())
             
-            # Compute diversity metrics
-            unique_items = len(set([item for item in generated_items if item != -1]))
-            total_items = len([item for item in generated_items if item != -1])
-            diversity = unique_items / total_items if total_items > 0 else 0.0
-            self._metrics["diversity"].append(diversity)
-            
-            # Compute accuracy
-            correct = sum([1 for gen, tgt in zip(generated_items, target_items) if gen == tgt and gen != -1])
-            accuracy = correct / len(generated_items) if len(generated_items) > 0 else 0.0
-            self._metrics["accuracy"].append(accuracy)
-            
-            return {
-                "encoder_input_ids": encoder_input_ids_expanded,
-                "encoder_attention_mask": encoder_attention_mask_expanded,
-                "decoder_input_ids": generated_ids,
-                "completion_mask": completion_mask[:, 1:],  # Align with logits
-                "ref_per_token_logps": ref_per_token_logps,
-                "advantages": advantages,
-                "sliced_rewards": sliced_rewards,
-            }
+            if num_generated > 0:
+                gen_rewards = rewards_reshaped[:, :num_generated].mean()
+                self._metrics["gen_reward"].append(gen_rewards.item())
+        
+        unique_items = len(set([item for item in generated_items if item != -1]))
+        total_items = len([item for item in generated_items if item != -1])
+        diversity = unique_items / total_items if total_items > 0 else 0.0
+        self._metrics["diversity"].append(diversity)
+        
+        correct = sum([1 for gen, tgt in zip(generated_items, target_items) if gen == tgt and gen != -1])
+        accuracy = correct / len(generated_items) if len(generated_items) > 0 else 0.0
+        self._metrics["accuracy"].append(accuracy)
+        
+        return {
+            "encoder_input_ids": encoder_input_ids_expanded,
+            "encoder_attention_mask": encoder_attention_mask_expanded,
+            "decoder_input_ids": generated_ids,
+            "completion_mask": completion_mask,
+            "ref_per_token_logps": ref_per_token_logps,
+            "advantages": advantages,
+            "sliced_rewards": sliced_rewards,
+        }
+
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
@@ -453,31 +356,23 @@ class GRPOTrainerForGenRec(Trainer):
         ref_per_token_logps = inputs["ref_per_token_logps"]
         advantages = inputs["advantages"]
         
-        # Forward pass through model
+        # Forward pass
         outputs = model(
             input_ids=encoder_input_ids,
             attention_mask=encoder_attention_mask,
             decoder_input_ids=decoder_input_ids,
             return_dict=True,
         )
-        logits = outputs.logits  # (B * num_beams, gen_len, vocab_size)
+        logits = outputs.logits  # [B*num_beams, L, vocab_size]
         
-        # Compute log probabilities
-        logits = logits[:, :-1, :]  # Exclude last logit
-        decoder_input_ids_for_logp = decoder_input_ids[:, 1:]  # Exclude first token
-        
-        # Compute log softmax
+        # ✅ 直接对齐（T5 已经处理了 shifting）
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-        
-        # Gather log probs for generated tokens
         per_token_logps = torch.gather(
             log_probs,
             dim=2,
-            index=decoder_input_ids_for_logp.unsqueeze(-1)
-        ).squeeze(-1)  # (B * num_beams, gen_len - 1)
-
-        # per_token_logps (B * num_beams, gen_len - 1)
-
+            index=decoder_input_ids.unsqueeze(-1)
+        ).squeeze(-1)  # [B*num_beams, L]
+        
         # Compute KL divergence
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
         
@@ -497,13 +392,89 @@ class GRPOTrainerForGenRec(Trainer):
         
         return loss
 
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[List[str]] = None):
+
+    def prediction_step(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ):
+        """
+        评估时调用 - 使用生成式评估
+        """
+        if ignore_keys is None:
+            if hasattr(model, "config"):
+                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+        
+        # ===== 准备输入 =====
         inputs = self._prepare_inputs(inputs)
+        
+        # 获取 labels
+        has_labels = "labels" in inputs
+        labels = inputs.get("labels")
+        
+        # ===== 1. 计算损失（使用 GRPO 的 _prepare_inputs 和 compute_loss）=====
         with torch.no_grad():
-            with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
-            loss = loss.mean().detach()
-        return loss, None, None
+            if has_labels:
+                # 使用 GRPO 的完整流程计算 loss
+                loss_inputs = {
+                    "input_ids": inputs["input_ids"],
+                    "attention_mask": inputs["attention_mask"],
+                    "labels": labels,
+                }
+                outputs = model(**loss_inputs)
+                loss = outputs.loss.mean().detach() if outputs.loss is not None else torch.tensor(0.0)
+            else:
+                loss = torch.tensor(0.0)
+        
+        # 如果只需要 loss，直接返回
+        if prediction_loss_only:
+            return (loss, None, None)
+        
+        # ===== 2. 执行生成操作（用于评估指标）=====
+        device = self.accelerator.device
+        encoder_input_ids = inputs["input_ids"].to(device)
+        encoder_attention_mask = inputs["attention_mask"].to(device)
+        
+        # 生成参数
+        gen_kwargs = {
+            "max_length": self.generation_params.get('max_gen_length', 5),
+            "num_beams": self.generation_params.get('num_beams', 10),
+            "num_return_sequences": self.generation_params.get('max_k', 10),
+            "early_stopping": True,
+            "pad_token_id": self.pad_token_id,
+            "eos_token_id": self.eos_token_id,
+
+            "num_return_sequences": self.num_generations,
+            "decoder_start_token_id": self.decoder_start_token_id,
+        }
+        
+        # 🔴 添加前缀约束（使用 GRPO 的 Trie）
+        if hasattr(self, 'prefix_allowed_fn') and self.prefix_allowed_fn:
+            gen_kwargs["prefix_allowed_tokens_fn"] = self.prefix_allowed_fn
+        
+        # 执行生成
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        generated_sequences = unwrapped_model.generate(
+            input_ids=encoder_input_ids,
+            attention_mask=encoder_attention_mask,
+            **gen_kwargs,
+        )
+        
+        # ===== 3. Reshape 生成结果 =====
+        # (batch_size * num_beams, seq_len) -> (batch_size, num_beams, seq_len)
+        batch_size = encoder_input_ids.shape[0]
+        num_return_sequences = gen_kwargs["num_return_sequences"]
+        generated_ids_reshaped = generated_sequences.view(batch_size, num_return_sequences, -1)
+        
+        # ===== 4. 返回结果 =====
+        # (loss, predictions, labels)
+        # predictions: 生成的序列 [B, num_beams, L]
+        # labels: 原始 labels（用于 compute_metrics）
+        return (loss, generated_ids_reshaped, labels)
 
     def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}
