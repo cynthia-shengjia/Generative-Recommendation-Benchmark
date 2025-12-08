@@ -5,7 +5,6 @@ from typing import Any, Callable, Optional, Sized, Union, Dict, List, Tuple
 import torch.nn as nn    
 
 import torch
-import torch.utils.data
 from torch.utils.data import Sampler
 from accelerate.utils import gather
 from transformers import (
@@ -284,7 +283,8 @@ class GRPOTrainer(Trainer):
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        # advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        advantages = rewards
         
         process_slice = slice(
             self.accelerator.process_index * batch_size * num_beams,
@@ -294,6 +294,7 @@ class GRPOTrainer(Trainer):
         sliced_rewards = rewards[process_slice]
         
         # ========== Part 7: Compute reference log probs ==========
+
         with torch.no_grad():
             encoder_input_ids_expanded = encoder_input_ids.repeat_interleave(num_beams, dim=0)
             encoder_attention_mask_expanded = encoder_attention_mask.repeat_interleave(num_beams, dim=0)
@@ -301,7 +302,7 @@ class GRPOTrainer(Trainer):
             ref_outputs = self.ref_model(
                 input_ids=encoder_input_ids_expanded,
                 attention_mask=encoder_attention_mask_expanded,
-                decoder_input_ids=generated_ids,
+                labels=generated_ids,
                 return_dict=True,
             )
             ref_logits = ref_outputs.logits
@@ -355,43 +356,57 @@ class GRPOTrainer(Trainer):
         completion_mask = inputs["completion_mask"]
         ref_per_token_logps = inputs["ref_per_token_logps"]
         advantages = inputs["advantages"]
-        
+
         # Forward pass
         outputs = model(
-            input_ids=encoder_input_ids,
-            attention_mask=encoder_attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            return_dict=True,
+            input_ids=encoder_input_ids, 
+            attention_mask=encoder_attention_mask, 
+            labels=decoder_input_ids,  # ✅ 只传 decoder_input_ids
+            return_dict=True, 
         )
         logits = outputs.logits  # [B*num_beams, L, vocab_size]
         
-        # ✅ 直接对齐（T5 已经处理了 shifting）
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-        per_token_logps = torch.gather(
-            log_probs,
-            dim=2,
-            index=decoder_input_ids.unsqueeze(-1)
-        ).squeeze(-1)  # [B*num_beams, L]
         
+        shifted_labels = decoder_input_ids    
+        shifted_logits = logits    
+
+        labels_clone = shifted_labels.clone()
+        loss_mask = labels_clone != self.pad_token_id
+        labels_clone[labels_clone == self.pad_token_id] = 0
+  
+
+        per_token_logps = torch.gather( 
+            shifted_logits.log_softmax(-1),    
+            dim=2, 
+            index=labels_clone.unsqueeze(-1)
+        ).squeeze(-1)
+
+
+        # loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)    
+
         # Compute KL divergence
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
         
-        # Compute GRPO loss
+        # # Compute GRPO loss
         per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        
+        
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
         
-        # Average over tokens and batch
-        loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-        
-        # Log metrics
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics["completion_length"].append(completion_length)
-        
-        mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-        self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-        
-        return loss
+        # # Average over tokens and batch
+        # # loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1)    
 
+        # # Log metrics
+        # completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
+        # self._metrics["completion_length"].append(completion_length)
+        
+        mean_kl = ((per_token_kl * loss_mask).sum(dim=1) / loss_mask.sum(dim=1)).mean()
+        
+        self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl.detach()).mean().item())
+
+        
+        return loss.mean()
 
     def prediction_step(
         self,
