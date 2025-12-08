@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+  - tokenizer: rqvae
+
+dataset: "Beauty"
+output_dir: "/home/zhenxiangxv/GR-Benchmark/pushVersion/Generative-Recommendation-Benchmark/Beauty"
+cuda: "0"
+
+force_retrain_tokenizer: false
+skip_tokenizer: false

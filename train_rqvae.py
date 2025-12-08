@@ -68,7 +68,7 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain:
         return False
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config")
+@hydra.main(version_base=None, config_path="config", config_name="quantization")
 def main(cfg: DictConfig):
     """主函数"""
     seed = getattr(cfg, 'seed', 42) 
