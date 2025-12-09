@@ -17,6 +17,7 @@ from transformers import PreTrainedModel, Trainer
 from genrec.generation.trie import Trie,prefix_allowed_tokens_fn
 
 
+
 class RepeatRandomSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset N times.
@@ -124,15 +125,15 @@ class GRPOTrainer(Trainer):
       
 
         # Validation
-        num_processes = self.accelerator.num_processes
-        global_batch_size = args.per_device_train_batch_size * num_processes
-        possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if global_batch_size % n_gen == 0]
-        if self.num_generations not in possible_values:
-            raise ValueError(
-                f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
-                f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
-                f"batch size, the valid values for the number of generations are: {possible_values}."
-            )
+        # num_processes = self.accelerator.num_processes
+        # global_batch_size = args.per_device_train_batch_size * num_processes
+        # possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if global_batch_size % n_gen == 0]
+        # if self.num_generations not in possible_values:
+        #     raise ValueError(
+        #         f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
+        #         f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
+        #         f"batch size, the valid values for the number of generations are: {possible_values}."
+        #     )
 
 
     def _default_reward_func(self, generated_items: List[int], target_items: List[int]) -> List[float]:
@@ -283,8 +284,8 @@ class GRPOTrainer(Trainer):
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        # advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
-        advantages = rewards
+        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-5)
+        # advantages = rewards
         
         process_slice = slice(
             self.accelerator.process_index * batch_size * num_beams,
@@ -306,9 +307,9 @@ class GRPOTrainer(Trainer):
                 return_dict=True,
             )
             ref_logits = ref_outputs.logits
-            ref_log_probs = torch.nn.functional.log_softmax(ref_logits, dim=-1)
+
             ref_per_token_logps = torch.gather(
-                ref_log_probs,
+                ref_logits.log_softmax(-1),
                 dim=2,
                 index=generated_ids.unsqueeze(-1)
             ).squeeze(-1)
@@ -382,16 +383,18 @@ class GRPOTrainer(Trainer):
         ).squeeze(-1)
 
 
-        # loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)    
+        # Cross-entropy: loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)    
 
         # Compute KL divergence
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
         
         # # Compute GRPO loss
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        policy_scores  = torch.exp(per_token_logps - per_token_logps.detach()) 
+        per_token_loss = policy_scores * advantages.unsqueeze(1)
         
-        
-        per_token_loss = -(per_token_loss - self.beta * per_token_kl)
+        cross_entropy_loss = -(per_token_loss)
+        kl_divergence_loss = per_token_kl
+        per_token_loss     = cross_entropy_loss + self.beta * kl_divergence_loss
         
         # # Average over tokens and batch
         # # loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
@@ -401,11 +404,12 @@ class GRPOTrainer(Trainer):
         # completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         # self._metrics["completion_length"].append(completion_length)
         
-        mean_kl = ((per_token_kl * loss_mask).sum(dim=1) / loss_mask.sum(dim=1)).mean()
+        mean_kl             = ((per_token_kl * loss_mask).sum(dim=1) / loss_mask.sum(dim=1)).mean()
+        mean_cross_entropy  = ((cross_entropy_loss * loss_mask).sum(dim=1) / loss_mask.sum(dim=1)).mean()
         
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl.detach()).mean().item())
+        self._metrics["policy_loss"].append(self.accelerator.gather_for_metrics(mean_cross_entropy.detach()).mean().item())
 
-        
         return loss.mean()
 
     def prediction_step(
