@@ -466,8 +466,6 @@ class GRPOTrainer(Trainer):
             "early_stopping": True,
             "pad_token_id": self.pad_token_id,
             "eos_token_id": self.eos_token_id,
-
-            "num_return_sequences": self.num_generations,
             "decoder_start_token_id": self.decoder_start_token_id,
         }
         
