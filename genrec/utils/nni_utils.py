@@ -46,6 +46,7 @@ def report_nni_metrics(metrics: Dict[str, float], is_final: bool = False):
             nni.report_intermediate_result(metrics)
         else:
             metrics.update({"default": metrics["eval_hit@5"]})
+            nni.report_intermediate_result(metrics)
             nni.report_final_result(metrics)
 
         # # 将指标报告给NNI
