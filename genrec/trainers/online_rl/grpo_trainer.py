@@ -212,7 +212,11 @@ class GRPOTrainer(Trainer):
                     return_dict_in_generate=True,
                     prefix_allowed_tokens_fn=self.prefix_allowed_fn,
                 )
-            generated_ids = outputs.sequences
+            generated_ids = outputs.sequences[:, 1:]  # 移除第一列
+            generated_ids = torch.cat([
+                generated_ids,
+                torch.ones_like(generated_ids[:, :1])  # 添加与第一列形状相同的1列
+            ], dim=1)
         else:
             generated_ids = None
         
