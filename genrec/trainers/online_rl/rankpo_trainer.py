@@ -373,9 +373,6 @@ class GRPOTrainer(Trainer):
         advantages = inputs["advantages"]
         
         
-        for idx in range(0,40,4):
-            print(advantages[idx:idx+4])
-        input()
         
         
         # Forward pass
