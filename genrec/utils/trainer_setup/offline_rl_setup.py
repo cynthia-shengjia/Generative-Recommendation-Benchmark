@@ -97,7 +97,7 @@ def setup_training(
     ]
     
     # ===== 4. 创建参考模型 =====
-    logger.info("创建参考模型（Reference Model）...")
+    # logger.info("创建参考模型（Reference Model）...")
     ref_model = create_t5_model(
         vocab_size=tokenizer.vocab_size,
         model_config=model_config
@@ -106,10 +106,10 @@ def setup_training(
     ref_model.eval()
     for param in ref_model.parameters():
         param.requires_grad = False
-    logger.info("参考模型创建完成")
+    # logger.info("参考模型创建完成")
     
     # ===== 5. 使用 partial instantiate 创建 Trainer =====
-    logger.info(f"实例化 Trainer: {offline_rl_config.trainer._target_}")
+    # logger.info(f"实例化 Trainer: {offline_rl_config.trainer._target_}")
     
     # 🔥 使用 instantiate 获取 partial 函数
     trainer_partial = instantiate(offline_rl_config.trainer)
@@ -131,12 +131,12 @@ def setup_training(
         eos_token_id=tokenizer.eos_token,
     )
     
-    logger.info(f"Trainer 配置完成:")
-    logger.info(f"  - Trainer 类型: {offline_rl_config.trainer._target_}")
-    logger.info(f"  - Beta: {offline_rl_config.trainer.get('beta', 'N/A')}")
-    logger.info(f"  - Num beams: {num_beams}")
-    logger.info(f"  - Max gen length: {max_gen_length}")
-    logger.info(f"  - Max k: {max_k}")
-    logger.info(f"  - Metric for best model: {training_args.metric_for_best_model}")
+    # logger.info(f"Trainer 配置完成:")
+    # logger.info(f"  - Trainer 类型: {offline_rl_config.trainer._target_}")
+    # logger.info(f"  - Beta: {offline_rl_config.trainer.get('beta', 'N/A')}")
+    # logger.info(f"  - Num beams: {num_beams}")
+    # logger.info(f"  - Max gen length: {max_gen_length}")
+    # logger.info(f"  - Max k: {max_k}")
+    # logger.info(f"  - Metric for best model: {training_args.metric_for_best_model}")
     
     return trainer

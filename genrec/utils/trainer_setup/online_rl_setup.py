@@ -82,7 +82,7 @@ def setup_training(
     ]
     
     # ===== 4. 创建参考模型 =====
-    logger.info("创建参考模型（Reference Model）...")
+    # logger.info("创建参考模型（Reference Model）...")
     ref_model = create_t5_model(
         vocab_size=tokenizer.vocab_size,
         model_config=model_config
@@ -91,17 +91,17 @@ def setup_training(
     ref_model.eval()
     for param in ref_model.parameters():
         param.requires_grad = False
-    logger.info("参考模型创建完成")
+    # logger.info("参考模型创建完成")
     
     # ===== 5. 创建奖励函数（如果配置中有）=====
     reward_func = None
     if 'reward_func' in online_rl_config.trainer:
-        logger.info(f"实例化 Reward Function: {online_rl_config.trainer.reward_func._target_}")
+        # logger.info(f"实例化 Reward Function: {online_rl_config.trainer.reward_func._target_}")
         reward_func = instantiate(online_rl_config.trainer.reward_func)
-        logger.info("Reward Function 创建完成")
+        # logger.info("Reward Function 创建完成")
     
     # ===== 6. 使用 partial instantiate 创建 Trainer =====
-    logger.info(f"实例化 Trainer: {online_rl_config.trainer._target_}")
+    # logger.info(f"实例化 Trainer: {online_rl_config.trainer._target_}")
     
     # 🔥 使用 instantiate 获取 partial 函数
     trainer_partial = instantiate(online_rl_config.trainer)
@@ -124,14 +124,14 @@ def setup_training(
         reward_func=reward_func,
     )
     
-    logger.info(f"Trainer 配置完成:")
-    logger.info(f"  - Trainer 类型: {online_rl_config.trainer._target_}")
-    logger.info(f"  - Beta: {online_rl_config.trainer.get('beta', 'N/A')}")
-    logger.info(f"  - Num generations: {online_rl_config.trainer.get('num_generations', 'N/A')}")
-    if reward_func:
-        logger.info(f"  - Reward Function: {type(reward_func).__name__}")
-    logger.info(f"  - Num beams: {num_beams}")
-    logger.info(f"  - Max gen length: {max_gen_length}")
-    logger.info(f"  - Max k: {max_k}")
+    # logger.info(f"Trainer 配置完成:")
+    # logger.info(f"  - Trainer 类型: {online_rl_config.trainer._target_}")
+    # logger.info(f"  - Beta: {online_rl_config.trainer.get('beta', 'N/A')}")
+    # logger.info(f"  - Num generations: {online_rl_config.trainer.get('num_generations', 'N/A')}")
+    # if reward_func:
+        # logger.info(f"  - Reward Function: {type(reward_func).__name__}")
+    # logger.info(f"  - Num beams: {num_beams}")
+    # logger.info(f"  - Max gen length: {max_gen_length}")
+    # logger.info(f"  - Max k: {max_k}")
     
     return trainer

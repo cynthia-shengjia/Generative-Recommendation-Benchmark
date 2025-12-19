@@ -112,142 +112,136 @@ def stage2_train_generation_model(
             logger.info("请先运行阶段1进行训练。")
         return False
     
-    try:
-        # ===== 加载 Tokenizer =====
+    # ===== 加载 Tokenizer =====
+    if accelerator.is_main_process:
+        logger.info(f"正在从 {tokenizer_object_path} 加载完整的tokenizer...")
+    tokenizer = RQVAETokenizer.load(tokenizer_object_path)
+    if accelerator.is_main_process:
+        logger.info(f"成功加载tokenizer，包含 {len(tokenizer.item2tokens)} 个物品的token映射")
+        logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
+        logger.info("创建生成模型...")
+    
+    # ===== 创建模型 =====
+    model = create_t5_model(
+        vocab_size=tokenizer.vocab_size,
+        model_config=model_config
+    )
+    
+    if accelerator.is_main_process:
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"模型总参数数量: {total_params:,}")
+        logger.info("创建数据集...")
+    
+    # ===== 创建数据集 =====
+    train_dataset = TigerDataset(
+        data_interaction_files=model_config['data_interaction_files'],
+        data_text_files=model_config['data_text_files'],
+        tokenizer=tokenizer,
+        config=model_config,
+        mode='train'
+    )
+    valid_dataset = TigerDataset(
+        data_interaction_files=model_config['data_interaction_files'],
+        data_text_files=model_config['data_text_files'],
+        tokenizer=tokenizer,
+        config=model_config,
+        mode='valid'
+    )
+    test_dataset = TigerDataset(
+        data_interaction_files=model_config['data_interaction_files'],
+        data_text_files=model_config['data_text_files'],
+        tokenizer=tokenizer,
+        config=model_config,
+        mode='test'
+    )
+    
+    # ===== 创建数据整理器 =====
+    train_data_collator = TigerDataCollator(
+        max_seq_len=train_dataset.max_token_len,
+        pad_token_id=tokenizer.pad_token,
+        eos_token_id=tokenizer.eos_token,
+        mode="train"
+    )
+    
+    test_data_collator = TigerDataCollator(
+        max_seq_len=train_dataset.max_token_len,
+        pad_token_id=tokenizer.pad_token,
+        eos_token_id=tokenizer.eos_token,
+        mode="test"
+    )
+    
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=model_config['test_batch_size'],
+        shuffle=False,
+        collate_fn=test_data_collator
+    )
+    
+    test_dataloader = accelerator.prepare(test_dataloader)
+    
+    # ===== 计算 Batch Size =====
+    train_batch_size = model_config['batch_size']
+    test_batch_size = model_config['test_batch_size']
+    num_devices = accelerator.num_processes
+    
+    if train_batch_size % num_devices != 0 or test_batch_size % num_devices != 0:
         if accelerator.is_main_process:
-            logger.info(f"正在从 {tokenizer_object_path} 加载完整的tokenizer...")
-        tokenizer = RQVAETokenizer.load(tokenizer_object_path)
-        if accelerator.is_main_process:
-            logger.info(f"成功加载tokenizer，包含 {len(tokenizer.item2tokens)} 个物品的token映射")
-            logger.info(f"Tokenizer的完整词汇表大小: {tokenizer.vocab_size}")
-            logger.info("创建生成模型...")
-        
-        # ===== 创建模型 =====
-        model = create_t5_model(
-            vocab_size=tokenizer.vocab_size,
-            model_config=model_config
-        )
-        
-        if accelerator.is_main_process:
-            total_params = sum(p.numel() for p in model.parameters())
-            logger.info(f"模型总参数数量: {total_params:,}")
-            logger.info("创建数据集...")
-        
-        # ===== 创建数据集 =====
-        train_dataset = TigerDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='train'
-        )
-        valid_dataset = TigerDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='valid'
-        )
-        test_dataset = TigerDataset(
-            data_interaction_files=model_config['data_interaction_files'],
-            data_text_files=model_config['data_text_files'],
-            tokenizer=tokenizer,
-            config=model_config,
-            mode='test'
-        )
-        
-        # ===== 创建数据整理器 =====
-        train_data_collator = TigerDataCollator(
-            max_seq_len=train_dataset.max_token_len,
-            pad_token_id=tokenizer.pad_token,
-            eos_token_id=tokenizer.eos_token,
-            mode="train"
-        )
-        
-        test_data_collator = TigerDataCollator(
-            max_seq_len=train_dataset.max_token_len,
-            pad_token_id=tokenizer.pad_token,
-            eos_token_id=tokenizer.eos_token,
-            mode="test"
-        )
-        
-        test_dataloader = DataLoader(
-            test_dataset,
-            batch_size=model_config['test_batch_size'],
-            shuffle=False,
-            collate_fn=test_data_collator
-        )
-        
-        test_dataloader = accelerator.prepare(test_dataloader)
-        
-        # ===== 计算 Batch Size =====
-        train_batch_size = model_config['batch_size']
-        test_batch_size = model_config['test_batch_size']
-        num_devices = accelerator.num_processes
-        
-        if train_batch_size % num_devices != 0 or test_batch_size % num_devices != 0:
-            if accelerator.is_main_process:
-                logger.error(f"错误: 训练批次大小 {train_batch_size} 或测试批次大小 {test_batch_size} 不能被设备数量 {num_devices} 整除。")
-            return False
-        
-        per_device_train_batch_size = train_batch_size // num_devices
-        per_device_eval_batch_size = test_batch_size // num_devices
-        
-        if accelerator.is_main_process:
-            logger.info(f"Batch Size 配置 (总共 {num_devices} 个设备)")
-            logger.info(f"  - 训练: 全局 {train_batch_size} -> 单设备 {per_device_train_batch_size}")
-            logger.info(f"  - 评估: 全局 {test_batch_size} -> 单设备 {per_device_eval_batch_size}")
-        
-        # ===== 设置训练器 =====
-        trainer = setup_training(
-            model,
-            tokenizer,
-            train_dataset,
-            valid_dataset,
-            model_config,
-            generative_config,  # 🔥 传递 generative 配置
-            output_dirs,
-            logger,
-            per_device_train_batch_size=per_device_train_batch_size,
-            per_device_eval_batch_size=per_device_eval_batch_size,
-            train_data_collator=train_data_collator,
-        )
-        
-        # ===== 开始训练 =====
-        trainer.train()
-        accelerator.wait_for_everyone()
-        
-        # ===== 测试评估 =====
-        if accelerator.is_main_process:
-            logger.info("使用约束beam search进行测试评估...")
-        
-        evaluate_model_with_constrained_beam_search(
-            model=model,
-            eval_dataloader=test_dataloader,
-            accelerator=accelerator,
-            tokenizer=tokenizer,
-            k_list=model_config.get("k_list", [5, 10, 20]),
-            num_beams=model_config.get("num_beams", 10),
-            max_gen_length=model_config.get("max_gen_length", 5),
-            logger=logger,
-            mode="Test"
-        )
-        
-        # ===== 保存最终模型 =====
-        if "NNI_PLATFORM" not in os.environ:
-            trainer.save_model(output_dirs['model'])
-        
-        if accelerator.is_main_process:
-            logger.info("生成模型训练和评估完成!")
-        
-        return True
-        
-    except Exception as e:
-        if accelerator.is_main_process:
-            logger.error(f"生成模型训练失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"错误: 训练批次大小 {train_batch_size} 或测试批次大小 {test_batch_size} 不能被设备数量 {num_devices} 整除。")
         return False
+    
+    per_device_train_batch_size = train_batch_size // num_devices
+    per_device_eval_batch_size = test_batch_size // num_devices
+    
+    if accelerator.is_main_process:
+        logger.info(f"Batch Size 配置 (总共 {num_devices} 个设备)")
+        logger.info(f"  - 训练: 全局 {train_batch_size} -> 单设备 {per_device_train_batch_size}")
+        logger.info(f"  - 评估: 全局 {test_batch_size} -> 单设备 {per_device_eval_batch_size}")
+    
+    # ===== 设置训练器 =====
+    trainer = setup_training(
+        model,
+        tokenizer,
+        train_dataset,
+        valid_dataset,
+        model_config,
+        generative_config,  # 🔥 传递 generative 配置
+        output_dirs,
+        logger,
+        per_device_train_batch_size=per_device_train_batch_size,
+        per_device_eval_batch_size=per_device_eval_batch_size,
+        train_data_collator=train_data_collator,
+    )
+    
+    # ===== 开始训练 =====
+    trainer.train()
+    accelerator.wait_for_everyone()
+    
+    # ===== 测试评估 =====
+    if accelerator.is_main_process:
+        logger.info("使用约束beam search进行测试评估...")
+    
+    evaluate_model_with_constrained_beam_search(
+        model=model,
+        eval_dataloader=test_dataloader,
+        accelerator=accelerator,
+        tokenizer=tokenizer,
+        k_list=model_config.get("k_list", [5, 10, 20]),
+        num_beams=model_config.get("num_beams", 10),
+        max_gen_length=model_config.get("max_gen_length", 5),
+        logger=logger,
+        mode="Test"
+    )
+    
+    # ===== 保存最终模型 =====
+    if "NNI_PLATFORM" not in os.environ:
+        trainer.save_model(output_dirs['model'])
+    
+    if accelerator.is_main_process:
+        logger.info("生成模型训练和评估完成!")
+    
+    return True
+        
+
 
 @hydra.main(version_base=None, config_path="config", config_name="generative")
 def main(cfg: DictConfig):

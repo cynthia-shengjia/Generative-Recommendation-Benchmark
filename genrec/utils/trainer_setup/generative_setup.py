@@ -94,7 +94,7 @@ def setup_training(
     ]
     
     # ===== 4. 使用 partial instantiate 创建 Trainer =====
-    logger.info(f"实例化 Trainer: {generative_config.trainer._target_}")
+    # logger.info(f"实例化 Trainer: {generative_config.trainer._target_}")
     
     # 🔥 使用 instantiate 获取 partial 函数
     trainer_partial = instantiate(generative_config.trainer)
@@ -114,11 +114,11 @@ def setup_training(
         eos_token_id=tokenizer.eos_token,
     )
     
-    logger.info(f"Trainer 配置完成:")
-    logger.info(f"  - Trainer 类型: {generative_config.trainer._target_}")
-    logger.info(f"  - Num beams: {num_beams}")
-    logger.info(f"  - Max gen length: {max_gen_length}")
-    logger.info(f"  - Max k: {max_k}")
-    logger.info(f"  - Metric for best model: {training_args.metric_for_best_model}")
+    # logger.info(f"Trainer 配置完成:")
+    # logger.info(f"  - Trainer 类型: {generative_config.trainer._target_}")
+    # logger.info(f"  - Num beams: {num_beams}")
+    # logger.info(f"  - Max gen length: {max_gen_length}")
+    # logger.info(f"  - Max k: {max_k}")
+    # logger.info(f"  - Metric for best model: {training_args.metric_for_best_model}")
     
     return trainer
