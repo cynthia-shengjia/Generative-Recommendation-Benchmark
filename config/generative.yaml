@@ -1,7 +1,10 @@
+# config/generative.yaml
+
 defaults:
   - _self_
   - model: t5
   - tokenizer: rqvae
+  - generative: tiger  # 🔥 新增：指定使用的 trainer
 
 dataset: "Beauty"
 output_dir: "/home/zhenxiangxv/GR-Benchmark/pushVersion/Generative-Recommendation-Benchmark/Beauty"
@@ -10,3 +13,4 @@ force_retrain_tokenizer: false
 force_retrain_model: false
 skip_tokenizer: false
 skip_model: false
+seed: 42
