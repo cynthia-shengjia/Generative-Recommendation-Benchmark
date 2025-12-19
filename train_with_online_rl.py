@@ -15,7 +15,7 @@ from genrec.utils.common_utils import set_seed
 from genrec.utils.logging_utils import setup_logging
 from genrec.utils.evaluation_utils import evaluate_model_with_constrained_beam_search
 from genrec.utils.models_setup.conditional_t5_setup import create_t5_model
-from genrec.utils.trainer_setup.online_rl.grpo_setup import setup_training
+from genrec.utils.trainer_setup.online_rl.online_rl_setup import setup_training
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -252,7 +252,7 @@ def stage2_train_generation_model(
             train_dataset,
             valid_dataset,
             model_config,
-            online_rl_config,
+            online_rl_config,  # 直接传递 DictConfig
             output_dirs,
             logger,
             per_device_train_batch_size=per_device_train_batch_size,
@@ -308,7 +308,7 @@ def stage2_train_generation_model(
 @hydra.main(version_base=None, config_path="config", config_name="online_rl")
 def main(cfg: DictConfig):
     """主函数"""
-    seed = getattr(cfg, 'seed', 42) 
+    seed = getattr(cfg, 'seed', 42)
     set_seed(seed)
 
     if "NNI_PLATFORM" in os.environ:
@@ -317,7 +317,6 @@ def main(cfg: DictConfig):
 
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
-    # 设置CUDA设备
     logger = None
     
     output_dirs = setup_output_directories(cfg.output_dir)
@@ -349,7 +348,7 @@ def main(cfg: DictConfig):
                 logger.info("Tokenizer训练失败，终止流程")
                 return
             success = success and tokenizer_success
-        accelerator.wait_for_everyone() # 等待主进程完成tokenizer训练
+        accelerator.wait_for_everyone()
     elif accelerator.is_main_process:
         logger.info("跳过tokenizer训练阶段")
     
@@ -361,13 +360,12 @@ def main(cfg: DictConfig):
         model_config['model_save_path'] = os.path.join(output_dirs['model'], f"{cfg.dataset}_final_model.pt")
         model_config['checkpoint_dir'] = output_dirs['checkpoints']
 
-        online_rl_config = OmegaConf.to_container(cfg.online_rl, resolve=True)
-        
+        # 🔥 直接传递 DictConfig（不转换为 dict）
         model_success = stage2_train_generation_model(
-            model_config, 
-            rqvae_config, 
-            online_rl_config,
-            output_dirs, 
+            model_config,
+            rqvae_config,
+            cfg.online_rl,  # 传递 DictConfig
+            output_dirs,
             accelerator,
             force_retrain=cfg.force_retrain_model,
             logger=logger
@@ -386,7 +384,6 @@ def main(cfg: DictConfig):
         logger.info(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*60)
     accelerator.wait_for_everyone()
-
 
 if __name__ == '__main__':
     main()

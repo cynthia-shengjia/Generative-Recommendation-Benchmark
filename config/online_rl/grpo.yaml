@@ -1,4 +1,17 @@
-beta: 0.1
-num_generations: 2
+# config/online_rl/grpo.yaml
+
+# Trainer 配置
+trainer:
+  _target_: genrec.trainers.online_rl.grpo_trainer.GRPOTrainer
+  _partial_: true         #  必须添加！
+  beta: 0.1
+  num_generations: 4
+  # 奖励函数配置
+  reward_func:
+    _target_: genrec.utils.trainer_setup.online_rl.online_rl_setup.create_grpo_reward_function
+    use_ndcg: true
+    ndcg_weight: 0.5
+
+# 模型路径配置
 pretrained_model: "/home/zsj/pretrained-models/Beauty-Official/generation_model"
-save_model_path:  "/home/zsj/pretrained-models/Beauty-PostTrain-Test"
+save_model_path: "/home/zsj/pretrained-models/Beauty-PostTrain-Test"

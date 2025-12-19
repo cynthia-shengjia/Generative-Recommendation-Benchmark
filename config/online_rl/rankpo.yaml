@@ -1,0 +1,14 @@
+# config/online_rl/rankpo.yaml
+
+# Trainer 配置
+trainer:
+  _target_: genrec.trainers.online_rl.rankpo_trainer.RankPOTrainer
+  _partial_: true         #  必须添加！
+  beta: 0.1
+  num_generations: 10
+  tau: 3
+  # RankPO 可能不需要 reward_func，或者使用不同的配置
+
+# 模型路径配置
+pretrained_model: "/home/zsj/pretrained-models/Beauty-Official/generation_model"
+save_model_path: "/home/zsj/pretrained-models/Beauty-PostTrain-RankPO"
