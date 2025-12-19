@@ -13,40 +13,6 @@ from genrec.utils.callbacks.generative.generative_callback import (
 )
 from genrec.utils.models_setup.conditional_t5_setup import create_t5_model
 
-import math
-
-def create_grpo_reward_function(use_ndcg=True, ndcg_weight=0.5):
-    """创建 GRPO 的奖励函数"""
-    def reward_func(generated_items: List[int], target_items: List[int],
-                   num_generations: int) -> List[float]:
-        ndcg_penalties = [-1.0/math.log2(i+2) for i in range(num_generations)]
-        ndcg_sum = sum(ndcg_penalties)
-        ndcg_penalties = [-elm/ndcg_sum for elm in ndcg_penalties]
-        
-        rewards = []
-        for group_idx in range(len(generated_items) // num_generations):
-            start_idx = group_idx * num_generations
-            end_idx = start_idx + num_generations
-            
-            group_gen_items = generated_items[start_idx:end_idx]
-            group_target_items = target_items[start_idx:end_idx]
-            
-            for rank, (gen_item, target_item) in enumerate(zip(group_gen_items, group_target_items)):
-                match_reward = 1.0 if gen_item == target_item else 0.0
-                
-                if not use_ndcg:
-                    final_reward = match_reward
-                else:
-                    if match_reward == 1.0:
-                        final_reward = (1 - ndcg_weight) * match_reward + ndcg_weight * 0.0
-                    else:
-                        final_reward = (1 - ndcg_weight) * match_reward + ndcg_weight * ndcg_penalties[rank]
-                
-                rewards.append(final_reward)
-        return rewards
-    
-    return reward_func
-
 def setup_training(
     model,
     tokenizer,
@@ -127,10 +93,12 @@ def setup_training(
         param.requires_grad = False
     logger.info("参考模型创建完成")
     
-    # ===== 5. 创建奖励函数（如果需要）=====
+    # ===== 5. 创建奖励函数（如果配置中有）=====
     reward_func = None
     if 'reward_func' in online_rl_config.trainer:
+        logger.info(f"实例化 Reward Function: {online_rl_config.trainer.reward_func._target_}")
         reward_func = instantiate(online_rl_config.trainer.reward_func)
+        logger.info("Reward Function 创建完成")
     
     # ===== 6. 使用 partial instantiate 创建 Trainer =====
     logger.info(f"实例化 Trainer: {online_rl_config.trainer._target_}")
@@ -160,6 +128,8 @@ def setup_training(
     logger.info(f"  - Trainer 类型: {online_rl_config.trainer._target_}")
     logger.info(f"  - Beta: {online_rl_config.trainer.get('beta', 'N/A')}")
     logger.info(f"  - Num generations: {online_rl_config.trainer.get('num_generations', 'N/A')}")
+    if reward_func:
+        logger.info(f"  - Reward Function: {type(reward_func).__name__}")
     logger.info(f"  - Num beams: {num_beams}")
     logger.info(f"  - Max gen length: {max_gen_length}")
     logger.info(f"  - Max k: {max_k}")

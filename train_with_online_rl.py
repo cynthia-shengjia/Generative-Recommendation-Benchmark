@@ -15,7 +15,7 @@ from genrec.utils.common_utils import set_seed
 from genrec.utils.logging_utils import setup_logging
 from genrec.utils.evaluation_utils import evaluate_model_with_constrained_beam_search
 from genrec.utils.models_setup.conditional_t5_setup import create_t5_model
-from genrec.utils.trainer_setup.online_rl.online_rl_setup import setup_training
+from genrec.utils.trainer_setup.online_rl_setup import setup_training
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
