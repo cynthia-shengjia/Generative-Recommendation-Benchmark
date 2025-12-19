@@ -1,4 +1,10 @@
-beta: 1e-3
+# config/offline_rl/sdpo.yaml
+
+trainer:
+  _target_: genrec.trainers.offline_rl.sdpo_trainer.SDPOTrainer
+  _partial_: true
+  beta: 0.001
+
 neg_num: 4
-pretrained_model: 
-save_model_path:  "/home/zsj/pretrained-models/Beauty-PostTrain-Test"
+pretrained_model: null
+save_model_path: "/home/zsj/pretrained-models/Beauty-PostTrain-Test"
