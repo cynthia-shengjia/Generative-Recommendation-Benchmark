@@ -154,3 +154,28 @@ class TigerTrainer(BaseGenerativeTrainer):
         generated_ids_reshaped = generated_sequences.view(batch_size, num_return_sequences, -1)
         
         return (loss, generated_ids_reshaped, labels)
+    
+    def compute_loss(self, model, inputs, return_outputs=False,num_items_in_batch=None):
+        
+        loss_mask = inputs.pop("loss_mask", None)
+        labels = inputs.get("labels")
+        # 2. 正常运行模型前向传播
+        outputs = model(**inputs)
+        logits = outputs.logits # 形状: [batch, seq_len, vocab_size]
+        loss = None
+        if labels is not None:
+            #loss_mask [batch_size, seq_len, vocab_size]
+            if loss_mask is not None:
+                
+                masked_logits = logits.masked_fill(loss_mask == 0.0, -1e9)
+
+                loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                loss = loss_fct(
+                    masked_logits.view(-1, unwrapped_model.config.vocab_size),
+                    labels.view(-1)
+                )
+            else:
+                loss = outputs.loss
+
+        return (loss, outputs) if return_outputs else loss
