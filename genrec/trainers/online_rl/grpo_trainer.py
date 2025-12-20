@@ -57,13 +57,6 @@ class GRPOTrainer(BaseOnlineRLTrainer):
     def _prepare_inputs_for_training(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         GRPO-specific input preparation.
-        
-        Steps:
-        1. Generate sequences using beam search
-        2. Optionally add ground truth
-        3. Compute rewards
-        4. Compute group-based advantages
-        5. Get reference model log probabilities
         """
         device = self.accelerator.device
         
@@ -171,21 +164,26 @@ class GRPOTrainer(BaseOnlineRLTrainer):
             num_generations=self.num_generations
         )
         rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
-        rewards = gather(rewards)
+        # ===== Gather rewards from all GPUs =====
+        gathered_rewards = gather(rewards)  # Shape: (total_batch_size * num_beams,)
+
+        # ===== Compute advantages using gathered rewards =====
+        # gathered_rewards has shape (num_gpus * batch_size * num_beams,)
+        total_samples = gathered_rewards.size(0) // self.num_generations
         
-        # ===== Compute advantages =====
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        mean_grouped_rewards = gathered_rewards.view(total_samples, self.num_generations).mean(dim=1)
+        std_grouped_rewards = gathered_rewards.view(total_samples, self.num_generations).std(dim=1)
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-5)
+        advantages = (gathered_rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-5)
         
+        # ===== Extract advantages for current process =====
         process_slice = slice(
             self.accelerator.process_index * batch_size * num_beams,
             (self.accelerator.process_index + 1) * batch_size * num_beams,
         )
         advantages = advantages[process_slice]
-        sliced_rewards = rewards[process_slice]
+        sliced_rewards = gathered_rewards[process_slice]
         
         # ===== Reference model log probs =====
         with torch.no_grad():
@@ -207,16 +205,17 @@ class GRPOTrainer(BaseOnlineRLTrainer):
             ).squeeze(-1)
         
         # ===== Log metrics =====
-        self._metrics["reward"].append(rewards.mean().item())
+        self._metrics["reward"].append(gathered_rewards.mean().item())
         self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
         
         if self.add_gt and num_gt_per_sample > 0:
-            rewards_reshaped = rewards.view(batch_size, num_beams)
-            gt_rewards = rewards_reshaped[:, -num_gt_per_sample:].mean()
+            # Use gathered rewards for metrics
+            gathered_rewards_reshaped = gathered_rewards.view(total_samples, num_beams)
+            gt_rewards = gathered_rewards_reshaped[:, -num_gt_per_sample:].mean()
             self._metrics["gt_reward"].append(gt_rewards.item())
             
             if num_generated > 0:
-                gen_rewards = rewards_reshaped[:, :num_generated].mean()
+                gen_rewards = gathered_rewards_reshaped[:, :num_generated].mean()
                 self._metrics["gen_reward"].append(gen_rewards.item())
         
         unique_items = len(set([item for item in generated_items if item != -1]))
