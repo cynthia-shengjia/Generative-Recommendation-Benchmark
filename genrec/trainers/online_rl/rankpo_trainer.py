@@ -18,7 +18,8 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         model: T5ForConditionalGeneration,
         ref_model: T5ForConditionalGeneration,
         beta: float,
-        tau: float,  # 🔥 RankPO-specific parameter
+        tau1: float,  # 🔥 RankPO-specific parameter
+        tau2: float,  # 🔥 RankPO-specific parameter
         num_generations: int,
         args=None,
         train_dataset=None,
@@ -55,7 +56,9 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         )
         
         # RankPO-specific parameter
-        self.tau = tau
+        self.tau1 = tau1
+        self.tau2 = tau2
+        self.activation = lambda x, tau: torch.where(x < 0, torch.exp(x/tau) / (2*tau), torch.exp(-x/tau) / (2*tau))
     
     def _prepare_inputs_for_training(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """RankPO-specific input preparation."""
@@ -177,17 +180,29 @@ class RankPOTrainer(BaseOnlineRLTrainer):
             gathered_quantiles = gathered["quantiles"]
             
             total_samples = gathered_scores.size(0) // num_seqs_per_sample
-            
+
             scores_reshaped = gathered_scores.view(total_samples, num_seqs_per_sample)
             is_positive_reshaped = gathered_is_positive.view(total_samples, num_seqs_per_sample)
             quantiles_reshaped = gathered_quantiles.view(total_samples)
             
             # Compute delta and advantages
-            delta = torch.sigmoid((scores_reshaped - quantiles_reshaped.unsqueeze(1)) / self.tau)
-            pos_advantage = is_positive_reshaped.float()
-            delta_sum = delta.sum(dim=1, keepdim=True)
-            neg_advantage = -(delta / (delta_sum + 1e-8)) * (1 - is_positive_reshaped)
-            advantages = (pos_advantage + neg_advantage).view(-1)
+            exceeding   = (scores_reshaped - quantiles_reshaped.unsqueeze(1))
+            
+            all_score   = exceeding
+            pos_score   = exceeding[:,-1].unsqueeze(-1)
+
+            all_delta   = self.activation(all_score,self.tau1)
+            pos_delta   = self.activation(pos_score,self.tau2)
+
+            
+
+            pos_advantage   = is_positive_reshaped.float()
+            delta_sum       = all_delta.sum(dim=1, keepdim=True)
+            neg_advantage   = -(all_delta / (delta_sum + 1e-8)) * (1 - is_positive_reshaped)
+
+
+            advantages = ((pos_advantage + neg_advantage))
+            advantages = advantages.view(-1)
             
             return advantages
         

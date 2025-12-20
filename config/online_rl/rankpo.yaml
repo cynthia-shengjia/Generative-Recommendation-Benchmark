@@ -4,7 +4,8 @@ trainer:
   _target_: genrec.trainers.online_rl.rankpo_trainer.RankPOTrainer
   _partial_: true
   beta: 1
-  tau: 3
+  tau1: 3
+  tau2: 3
   num_generations: 4
   # RankPO doesn't need reward_func
 
