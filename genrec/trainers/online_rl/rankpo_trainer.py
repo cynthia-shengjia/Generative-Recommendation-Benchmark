@@ -3,7 +3,6 @@
 from typing import Callable, Optional, Dict, List, Tuple
 import torch
 from transformers import T5ForConditionalGeneration, TrainerCallback
-from accelerate.utils import gather
 
 from .base_trainer import BaseOnlineRLTrainer
 
@@ -28,7 +27,7 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         compute_metrics: Optional[Callable] = None,
         generation_params: Optional[Dict] = None,
-        reward_func: Optional[Callable] = None,  # RankPO doesn't use reward_func
+        reward_func: Optional[Callable] = None,
         item2tokens: Optional[Dict] = None,
         tokens2item: Optional[Dict] = None,
         pad_token_id: Optional[int] = None,
@@ -59,16 +58,7 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         self.tau = tau
     
     def _prepare_inputs_for_training(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        RankPO-specific input preparation.
-        
-        Steps:
-        1. Generate sequences and get their scores
-        2. Compute quantile from scores
-        3. Optionally add ground truth with its score
-        4. Compute advantages based on quantile and positive/negative labels
-        5. Get reference model log probabilities
-        """
+        """RankPO-specific input preparation."""
         device = self.accelerator.device
         
         encoder_input_ids = inputs["input_ids"].to(device)
@@ -157,8 +147,7 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
         
-        # ===== Compute advantages (BEFORE gather) =====
-        # Get all item IDs
+        # ===== Get all item IDs =====
         all_items = []
         for i in range(all_ids_flat.size(0)):
             tokens = all_ids_flat[i].cpu().tolist()
@@ -180,33 +169,43 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         # Positive/negative labels
         is_positive = (all_items == gt_items_expanded).float()
         
-        # 🔥 Gather scores and is_positive BEFORE computing advantages
-        all_scores_gathered = gather(all_scores_flat)
-        is_positive_gathered = gather(is_positive)
-        quantiles_gathered = gather(quantiles)
+        # ===== Compute advantages using base class method =====
+        def compute_rankpo_advantages(gathered: Dict[str, torch.Tensor]) -> torch.Tensor:
+            """Compute RankPO advantages based on quantiles and positive labels."""
+            gathered_scores = gathered["scores"]
+            gathered_is_positive = gathered["is_positive"]
+            gathered_quantiles = gathered["quantiles"]
+            
+            total_samples = gathered_scores.size(0) // num_seqs_per_sample
+            
+            scores_reshaped = gathered_scores.view(total_samples, num_seqs_per_sample)
+            is_positive_reshaped = gathered_is_positive.view(total_samples, num_seqs_per_sample)
+            quantiles_reshaped = gathered_quantiles.view(total_samples)
+            
+            # Compute delta and advantages
+            delta = torch.sigmoid((scores_reshaped - quantiles_reshaped.unsqueeze(1)) / self.tau)
+            pos_advantage = is_positive_reshaped.float()
+            delta_sum = delta.sum(dim=1, keepdim=True)
+            neg_advantage = -(delta / (delta_sum + 1e-8)) * (1 - is_positive_reshaped)
+            advantages = (pos_advantage + neg_advantage).view(-1)
+            
+            return advantages
         
-        # 🔥 Compute advantages using gathered data
-        total_samples = all_scores_gathered.size(0) // num_seqs_per_sample
-        
-        all_scores_reshaped = all_scores_gathered.view(total_samples, num_seqs_per_sample)
-        is_positive_reshaped = is_positive_gathered.view(total_samples, num_seqs_per_sample)
-        quantiles_reshaped = quantiles_gathered.view(total_samples)
-        
-        # Compute delta and advantages
-        delta = torch.sigmoid((all_scores_reshaped - quantiles_reshaped.unsqueeze(1)) / self.tau)
-        pos_advantage = is_positive_reshaped.float()
-        delta_sum = delta.sum(dim=1, keepdim=True)
-        neg_advantage = -delta * (delta / (delta_sum + 1e-8)) * (1 - is_positive_reshaped)
-        advantages = (pos_advantage + neg_advantage).view(-1)
-        
-        # 🔥 Extract advantages for current process
-        process_slice = slice(
-            self.accelerator.process_index * batch_size * num_seqs_per_sample,
-            (self.accelerator.process_index + 1) * batch_size * num_seqs_per_sample,
+        advantages, gathered_data = self._gather_compute_slice(
+            tensors_to_gather={
+                "scores": all_scores_flat,
+                "is_positive": is_positive,
+                "quantiles": quantiles,
+            },
+            batch_size=batch_size,
+            num_seqs_per_sample=num_seqs_per_sample,
+            compute_fn=compute_rankpo_advantages,
+            return_gathered=True,
         )
-        advantages = advantages[process_slice]
-        sliced_scores = all_scores_gathered[process_slice]
-        sliced_is_positive = is_positive_gathered[process_slice]
+        
+        gathered_scores = gathered_data["scores"]
+        gathered_is_positive = gathered_data["is_positive"]
+        gathered_quantiles = gathered_data["quantiles"]
         
         # ===== Reference model log probs =====
         with torch.no_grad():
@@ -228,20 +227,20 @@ class RankPOTrainer(BaseOnlineRLTrainer):
             ).squeeze(-1)
         
         # ===== Log metrics =====
-        self._metrics["mean_score"].append(all_scores_gathered.mean().item())
-        self._metrics["quantile"].append(quantiles_gathered.mean().item())
+        self._metrics["mean_score"].append(gathered_scores.mean().item())
+        self._metrics["quantile"].append(gathered_quantiles.mean().item())
         self._metrics["advantage_mean"].append(advantages.mean().item())
         self._metrics["advantage_std"].append(advantages.std().item())
         
-        if is_positive_gathered.sum() > 0:
-            pos_scores = all_scores_gathered[is_positive_gathered.bool()]
+        if gathered_is_positive.sum() > 0:
+            pos_scores = gathered_scores[gathered_is_positive.bool()]
             self._metrics["pos_score_mean"].append(pos_scores.mean().item())
         
-        if (1 - is_positive_gathered).sum() > 0:
-            neg_scores = all_scores_gathered[(1 - is_positive_gathered).bool()]
+        if (1 - gathered_is_positive).sum() > 0:
+            neg_scores = gathered_scores[(1 - gathered_is_positive).bool()]
             self._metrics["neg_score_mean"].append(neg_scores.mean().item())
         
-        accuracy = is_positive_gathered.mean().item()
+        accuracy = gathered_is_positive.mean().item()
         self._metrics["accuracy"].append(accuracy)
         
         unique_items = len(set(all_items.cpu().tolist()))

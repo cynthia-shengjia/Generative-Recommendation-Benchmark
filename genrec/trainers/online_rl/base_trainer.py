@@ -25,6 +25,7 @@ class BaseOnlineRLTrainer(Trainer, ABC):
     - Reference model management
     - Evaluation with generation
     - Metrics logging
+    - Distributed training utilities (gather, compute, slice)
     
     Subclasses need to implement:
     - _prepare_inputs_for_training: Training-specific input preparation
@@ -53,28 +54,7 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         eos_token_id: Optional[int] = None,
         optimizers: Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
     ):
-        """
-        Initialize Base Online RL Trainer.
-        
-        Args:
-            model: Policy model
-            ref_model: Reference model (frozen)
-            beta: KL penalty coefficient
-            num_generations: Number of sequences to generate per prompt
-            args: Training arguments
-            train_dataset: Training dataset
-            eval_dataset: Evaluation dataset
-            data_collator: Data collator
-            callbacks: List of callbacks
-            compute_metrics: Metrics computation function
-            generation_params: Generation parameters (max_gen_length, num_beams, max_k)
-            reward_func: Reward function (optional, some algorithms don't need it)
-            item2tokens: Item to tokens mapping
-            tokens2item: Tokens to item mapping
-            pad_token_id: Padding token ID
-            eos_token_id: EOS token ID
-            optimizers: Optimizer and scheduler tuple
-        """
+        # ... (same as before)
         
         # ===== Tokenizer and Trie =====
         self.item2tokens = item2tokens
@@ -104,7 +84,7 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         self.log_completions = args.log_completions if hasattr(args, 'log_completions') else False
         
         # ===== Training flags =====
-        self.add_gt = True  # Whether to add ground truth to training samples
+        self.add_gt = True
         
         # ===== Initialize parent Trainer =====
         super().__init__(
@@ -125,32 +105,14 @@ class BaseOnlineRLTrainer(Trainer, ABC):
             raise AttributeError("Trainer does not have an accelerator object")
     
     def _default_reward_func(self, generated_items: List[int], target_items: List[int], **kwargs) -> List[float]:
-        """
-        Default reward function: 1.0 if generated item matches target, 0.0 otherwise.
-        
-        Args:
-            generated_items: List of generated item IDs
-            target_items: List of target item IDs
-            **kwargs: Additional arguments (e.g., num_generations for GRPO)
-        
-        Returns:
-            List of rewards
-        """
+        """Default reward function: 1.0 if match, 0.0 otherwise."""
         rewards = []
         for gen_item, target_item in zip(generated_items, target_items):
             rewards.append(1.0 if gen_item == target_item else 0.0)
         return rewards
     
     def _tokens_to_item(self, token_list: List[int]) -> Optional[int]:
-        """
-        Convert a list of tokens to item ID.
-        
-        Args:
-            token_list: List of token IDs
-        
-        Returns:
-            Item ID or None if not found
-        """
+        """Convert a list of tokens to item ID."""
         clean_tokens = [
             t for t in token_list 
             if t not in [self.pad_token_id, self.eos_token_id, self.decoder_start_token_id]
@@ -158,24 +120,84 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         tokens_tuple = tuple(clean_tokens)
         return self.tokens2item.get(tokens_tuple, None)
     
+    def _gather_compute_slice(
+        self,
+        tensors_to_gather: Dict[str, torch.Tensor],
+        batch_size: int,
+        num_seqs_per_sample: int,
+        compute_fn: Callable[[Dict[str, torch.Tensor]], torch.Tensor],
+        return_gathered: bool = True,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Universal gather-compute-slice pattern for distributed training.
+        
+        This method abstracts the common pattern:
+        1. Gather tensors from all processes
+        2. Compute advantages/values on gathered data
+        3. Slice back to current process
+        
+        Args:
+            tensors_to_gather: Dict of tensors to gather, each with shape (batch_size * num_seqs_per_sample,) or (batch_size,)
+            batch_size: Batch size per process
+            num_seqs_per_sample: Number of sequences per sample
+            compute_fn: Function to compute advantages from gathered tensors
+                       Input: Dict of gathered tensors (same keys as tensors_to_gather)
+                       Output: Computed advantages, shape (total_samples * num_seqs_per_sample,)
+            return_gathered: Whether to return gathered tensors (for logging)
+        
+        Returns:
+            Tuple of:
+            - advantages: Computed advantages for current process, shape (batch_size * num_seqs_per_sample,)
+            - gathered_tensors: Dict of gathered tensors (if return_gathered=True), otherwise empty dict
+        
+        Example usage for GRPO:
+            advantages, gathered = self._gather_compute_slice(
+                tensors_to_gather={"rewards": rewards},
+                batch_size=batch_size,
+                num_seqs_per_sample=num_beams,
+                compute_fn=lambda g: (g["rewards"].view(-1, num_beams) - g["rewards"].view(-1, num_beams).mean(1, keepdim=True)) 
+                                     / (g["rewards"].view(-1, num_beams).std(1, keepdim=True) + 1e-5)).view(-1),
+            )
+        
+        Example usage for RankPO:
+            advantages, gathered = self._gather_compute_slice(
+                tensors_to_gather={"scores": scores, "is_positive": is_positive, "quantiles": quantiles},
+                batch_size=batch_size,
+                num_seqs_per_sample=num_seqs,
+                compute_fn=lambda g: compute_rankpo_advantages(g, num_seqs, tau),
+            )
+        """
+        # ===== Step 1: Gather tensors from all processes =====
+        gathered_tensors = {}
+        for key, tensor in tensors_to_gather.items():
+            gathered_tensors[key] = gather(tensor)
+        
+        # ===== Step 2: Compute advantages on gathered data =====
+        advantages = compute_fn(gathered_tensors)
+        
+        # ===== Step 3: Slice back to current process =====
+        process_slice = slice(
+            self.accelerator.process_index * batch_size * num_seqs_per_sample,
+            (self.accelerator.process_index + 1) * batch_size * num_seqs_per_sample,
+        )
+        sliced_advantages = advantages[process_slice]
+        
+        # ===== Step 4: Optionally slice gathered tensors for logging =====
+        if return_gathered:
+            sliced_gathered = {key: tensor[process_slice] for key, tensor in gathered_tensors.items()}
+            return sliced_advantages, {**gathered_tensors, **{f"sliced_{k}": v for k, v in sliced_gathered.items()}}
+        else:
+            return sliced_advantages, {}
+    
     def _prepare_inputs(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         Prepare inputs for training or evaluation.
         
         - Training mode: Use algorithm-specific preparation
         - Evaluation mode: Use standard preparation
-        
-        Args:
-            inputs: Input dictionary
-        
-        Returns:
-            Prepared inputs
         """
         if not self.model.training:
-            # Evaluation mode: standard preparation
             return super()._prepare_inputs(inputs)
-        
-        # Training mode: algorithm-specific preparation
         return self._prepare_inputs_for_training(inputs)
     
     @abstractmethod
@@ -187,18 +209,6 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         1. Generate sequences
         2. Compute rewards/advantages
         3. Prepare reference model outputs
-        
-        Args:
-            inputs: Input dictionary with keys: input_ids, attention_mask, labels
-        
-        Returns:
-            Dictionary with prepared inputs for compute_loss, typically including:
-            - encoder_input_ids
-            - encoder_attention_mask
-            - decoder_input_ids
-            - completion_mask
-            - ref_per_token_logps
-            - advantages (or other algorithm-specific values)
         """
         raise NotImplementedError("Subclasses must implement _prepare_inputs_for_training")
     
@@ -210,20 +220,7 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         return_outputs=False, 
         num_items_in_batch=None
     ):
-        """
-        Compute algorithm-specific loss.
-        
-        This method should be implemented by subclasses.
-        
-        Args:
-            model: The model
-            inputs: Prepared inputs from _prepare_inputs_for_training
-            return_outputs: Whether to return outputs (not supported)
-            num_items_in_batch: Number of items in batch
-        
-        Returns:
-            Loss tensor
-        """
+        """Compute algorithm-specific loss."""
         raise NotImplementedError("Subclasses must implement compute_loss")
     
     def prediction_step(
@@ -233,34 +230,18 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ):
-        """
-        Evaluation step with generation.
-        
-        This method is shared across all online RL trainers.
-        
-        Args:
-            model: The model
-            inputs: Input dictionary
-            prediction_loss_only: Whether to only compute loss
-            ignore_keys: Keys to ignore
-        
-        Returns:
-            Tuple of (loss, predictions, labels)
-        """
+        """Evaluation step with generation."""
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
             else:
                 ignore_keys = []
         
-        # ===== Prepare inputs =====
         inputs = self._prepare_inputs(inputs)
-        
-        # Get labels
         has_labels = "labels" in inputs
         labels = inputs.get("labels")
         
-        # ===== 1. Compute loss =====
+        # Compute loss
         with torch.no_grad():
             if has_labels:
                 loss_inputs = {
@@ -276,7 +257,7 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         if prediction_loss_only:
             return (loss, None, None)
         
-        # ===== 2. Generate sequences =====
+        # Generate sequences
         device = self.accelerator.device
         encoder_input_ids = inputs["input_ids"].to(device)
         encoder_attention_mask = inputs["attention_mask"].to(device)
@@ -301,7 +282,6 @@ class BaseOnlineRLTrainer(Trainer, ABC):
             **gen_kwargs,
         )
         
-        # ===== 3. Reshape results =====
         batch_size = encoder_input_ids.shape[0]
         num_return_sequences = gen_kwargs["num_return_sequences"]
         generated_ids_reshaped = generated_sequences.view(batch_size, num_return_sequences, -1)
@@ -309,25 +289,12 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         return (loss, generated_ids_reshaped, labels)
     
     def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
-        """
-        Log metrics.
-        
-        This method aggregates metrics collected during training and adds them to logs.
-        
-        Args:
-            logs: Log dictionary
-            start_time: Start time (optional)
-        """
-        # Aggregate metrics
+        """Log metrics."""
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items() if len(val) > 0}
         
-        # Add eval prefix if needed
         if logs and next(iter(logs.keys())).startswith("eval_"):
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
         
-        # Merge with existing logs
         logs = {**logs, **metrics}
         super().log(logs, start_time)
-        
-        # Clear metrics
         self._metrics.clear()

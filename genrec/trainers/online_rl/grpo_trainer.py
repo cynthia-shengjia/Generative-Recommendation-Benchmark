@@ -3,7 +3,6 @@
 from typing import Callable, Optional, Dict, List, Tuple
 import torch
 from transformers import T5ForConditionalGeneration, TrainerCallback
-from accelerate.utils import gather
 
 from .base_trainer import BaseOnlineRLTrainer
 
@@ -14,50 +13,8 @@ class GRPOTrainer(BaseOnlineRLTrainer):
     GRPO uses group-based advantage estimation with optional NDCG rewards.
     """
     
-    def __init__(
-        self,
-        model: T5ForConditionalGeneration,
-        ref_model: T5ForConditionalGeneration,
-        beta: float,
-        num_generations: int,
-        args=None,
-        train_dataset=None,
-        eval_dataset=None,
-        data_collator=None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        compute_metrics: Optional[Callable] = None,
-        generation_params: Optional[Dict] = None,
-        reward_func: Optional[Callable] = None,
-        item2tokens: Optional[Dict] = None,
-        tokens2item: Optional[Dict] = None,
-        pad_token_id: Optional[int] = None,
-        eos_token_id: Optional[int] = None,
-        optimizers: Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-    ):
-        super().__init__(
-            model=model,
-            ref_model=ref_model,
-            beta=beta,
-            num_generations=num_generations,
-            args=args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            data_collator=data_collator,
-            callbacks=callbacks,
-            compute_metrics=compute_metrics,
-            generation_params=generation_params,
-            reward_func=reward_func,
-            item2tokens=item2tokens,
-            tokens2item=tokens2item,
-            pad_token_id=pad_token_id,
-            eos_token_id=eos_token_id,
-            optimizers=optimizers,
-        )
-    
     def _prepare_inputs_for_training(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        GRPO-specific input preparation.
-        """
+        """GRPO-specific input preparation."""
         device = self.accelerator.device
         
         encoder_input_ids = inputs["input_ids"].to(device)
@@ -164,26 +121,29 @@ class GRPOTrainer(BaseOnlineRLTrainer):
             num_generations=self.num_generations
         )
         rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
-        # ===== Gather rewards from all GPUs =====
-        gathered_rewards = gather(rewards)  # Shape: (total_batch_size * num_beams,)
-
-        # ===== Compute advantages using gathered rewards =====
-        # gathered_rewards has shape (num_gpus * batch_size * num_beams,)
-        total_samples = gathered_rewards.size(0) // self.num_generations
         
-        mean_grouped_rewards = gathered_rewards.view(total_samples, self.num_generations).mean(dim=1)
-        std_grouped_rewards = gathered_rewards.view(total_samples, self.num_generations).std(dim=1)
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (gathered_rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-5)
+        # ===== Compute advantages using base class method =====
+        def compute_grpo_advantages(gathered: Dict[str, torch.Tensor]) -> torch.Tensor:
+            """Compute GRPO advantages: (rewards - group_mean) / (group_std + eps)"""
+            gathered_rewards = gathered["rewards"]
+            total_samples = gathered_rewards.size(0) // num_beams
+            
+            rewards_reshaped = gathered_rewards.view(total_samples, num_beams)
+            mean_grouped = rewards_reshaped.mean(dim=1, keepdim=True)
+            std_grouped = rewards_reshaped.std(dim=1, keepdim=True)
+            
+            advantages = (rewards_reshaped - mean_grouped) / (std_grouped + 1e-5)
+            return advantages.view(-1)
         
-        # ===== Extract advantages for current process =====
-        process_slice = slice(
-            self.accelerator.process_index * batch_size * num_beams,
-            (self.accelerator.process_index + 1) * batch_size * num_beams,
+        advantages, gathered_data = self._gather_compute_slice(
+            tensors_to_gather={"rewards": rewards},
+            batch_size=batch_size,
+            num_seqs_per_sample=num_beams,
+            compute_fn=compute_grpo_advantages,
+            return_gathered=True,
         )
-        advantages = advantages[process_slice]
-        sliced_rewards = gathered_rewards[process_slice]
+        
+        gathered_rewards = gathered_data["rewards"]
         
         # ===== Reference model log probs =====
         with torch.no_grad():
@@ -206,16 +166,18 @@ class GRPOTrainer(BaseOnlineRLTrainer):
         
         # ===== Log metrics =====
         self._metrics["reward"].append(gathered_rewards.mean().item())
-        self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
+        
+        # Compute std from gathered rewards
+        total_samples = gathered_rewards.size(0) // num_beams
+        rewards_reshaped = gathered_rewards.view(total_samples, num_beams)
+        self._metrics["reward_std"].append(rewards_reshaped.std(dim=1).mean().item())
         
         if self.add_gt and num_gt_per_sample > 0:
-            # Use gathered rewards for metrics
-            gathered_rewards_reshaped = gathered_rewards.view(total_samples, num_beams)
-            gt_rewards = gathered_rewards_reshaped[:, -num_gt_per_sample:].mean()
+            gt_rewards = rewards_reshaped[:, -num_gt_per_sample:].mean()
             self._metrics["gt_reward"].append(gt_rewards.item())
             
             if num_generated > 0:
-                gen_rewards = gathered_rewards_reshaped[:, :num_generated].mean()
+                gen_rewards = rewards_reshaped[:, :num_generated].mean()
                 self._metrics["gen_reward"].append(gen_rewards.item())
         
         unique_items = len(set([item for item in generated_items if item != -1]))
@@ -234,15 +196,10 @@ class GRPOTrainer(BaseOnlineRLTrainer):
             "completion_mask": completion_mask,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
-            "sliced_rewards": sliced_rewards,
         }
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        """
-        Compute GRPO loss.
-        
-        Loss = Policy Loss + β * KL Divergence
-        """
+        """Compute GRPO loss."""
         if return_outputs:
             raise ValueError("GRPOTrainer does not support returning outputs")
         
