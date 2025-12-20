@@ -157,7 +157,7 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
         
-        # ===== Compute advantages =====
+        # ===== Compute advantages (BEFORE gather) =====
         # Get all item IDs
         all_items = []
         for i in range(all_ids_flat.size(0)):
@@ -180,25 +180,33 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         # Positive/negative labels
         is_positive = (all_items == gt_items_expanded).float()
         
-        # Compute advantage
-        all_scores_reshaped = all_scores_flat.view(batch_size, num_seqs_per_sample)
-        is_positive_reshaped = is_positive.view(batch_size, num_seqs_per_sample)
-        delta = torch.sigmoid((all_scores_reshaped - quantiles.unsqueeze(1)) / self.tau)
+        # 🔥 Gather scores and is_positive BEFORE computing advantages
+        all_scores_gathered = gather(all_scores_flat)
+        is_positive_gathered = gather(is_positive)
+        quantiles_gathered = gather(quantiles)
+        
+        # 🔥 Compute advantages using gathered data
+        total_samples = all_scores_gathered.size(0) // num_seqs_per_sample
+        
+        all_scores_reshaped = all_scores_gathered.view(total_samples, num_seqs_per_sample)
+        is_positive_reshaped = is_positive_gathered.view(total_samples, num_seqs_per_sample)
+        quantiles_reshaped = quantiles_gathered.view(total_samples)
+        
+        # Compute delta and advantages
+        delta = torch.sigmoid((all_scores_reshaped - quantiles_reshaped.unsqueeze(1)) / self.tau)
         pos_advantage = is_positive_reshaped.float()
         delta_sum = delta.sum(dim=1, keepdim=True)
         neg_advantage = -delta * (delta / (delta_sum + 1e-8)) * (1 - is_positive_reshaped)
         advantages = (pos_advantage + neg_advantage).view(-1)
         
-        # Gather
-        advantages = gather(advantages)
-        all_scores_gathered = gather(all_scores_flat)
-        is_positive_gathered = gather(is_positive)
-        
+        # 🔥 Extract advantages for current process
         process_slice = slice(
             self.accelerator.process_index * batch_size * num_seqs_per_sample,
             (self.accelerator.process_index + 1) * batch_size * num_seqs_per_sample,
         )
         advantages = advantages[process_slice]
+        sliced_scores = all_scores_gathered[process_slice]
+        sliced_is_positive = is_positive_gathered[process_slice]
         
         # ===== Reference model log probs =====
         with torch.no_grad():
@@ -221,7 +229,7 @@ class RankPOTrainer(BaseOnlineRLTrainer):
         
         # ===== Log metrics =====
         self._metrics["mean_score"].append(all_scores_gathered.mean().item())
-        self._metrics["quantile"].append(quantiles.mean().item())
+        self._metrics["quantile"].append(quantiles_gathered.mean().item())
         self._metrics["advantage_mean"].append(advantages.mean().item())
         self._metrics["advantage_std"].append(advantages.std().item())
         
