@@ -26,22 +26,24 @@ class GenerativeLoggingCallback(TrainerCallback):
     一个自定义的回调函数，将 Trainer 的日志（包括训练进度和评估结果）
     转发到指定的 logger。
     """
-    def __init__(self, logger):
-        super().__init__()
-        self.logger = logger
-
-    def on_log(self, args: TrainingArguments, state: TrainerState, control, logs=None, **kwargs):
-        if state.is_world_process_zero and logs:
-            if any(key.startswith("eval_") for key in logs.keys()):
-                self.logger.info("***** 验证结果 *****")
-                metrics = {}
-                for key, value in logs.items():
-                    self.logger.info(f"  {key}: {value}")
-                    metrics.update({key: value})
-                if "NNI_PLATFORM" in os.environ:
-                    is_final = state.epoch >= args.num_train_epochs
-                    report_nni_metrics(metrics,is_final)
-            else: 
-                _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}
-                log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())
+    def __init__(self, logger):  
+        super().__init__()  
+        self.logger = logger  
+        self.best_metrics = None  # 添加：跟踪最佳指标
+        self.best_score = float('-inf')  # 添加：跟踪最佳分数
+  
+    def on_log(self, args: TrainingArguments, state: TrainerState, control, logs=None, **kwargs):  
+        if state.is_world_process_zero and logs:  
+            if any(key.startswith("eval_") for key in logs.keys()):  
+                self.logger.info("***** 验证结果 *****")  
+                metrics = {}  
+                for key, value in logs.items():  
+                    self.logger.info(f"  {key}: {value}")  
+                    metrics.update({key: value})  
+                if "NNI_PLATFORM" in os.environ:  
+                    is_final = state.epoch >= args.num_train_epochs  
+                    report_nni_metrics(metrics, is_final, self)  # 修改：传递 self
+            else:   
+                _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}  
+                log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())  
                 self.logger.info(log_str)
