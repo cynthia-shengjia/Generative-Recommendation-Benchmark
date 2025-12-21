@@ -133,21 +133,18 @@ class SASRecDataset(Dataset):
         for user_id, item_seq in self.user_seqs.items():
             if self.mode == 'train':
                 train_item_seq = item_seq[:-2]
-                # if len(train_item_seq) < 2: continue
-                # for i in range(2, len(train_item_seq)+1):
-                #     # 目标是当前item
-                #     input_seq = train_item_seq[:i]
-                    
-                #     # 截断输入序列，使其不超过 max_len
-                #     input_seq = input_seq[-max_len:]
-                    
-                #     samples.append({
-                #         'input_ids': input_seq,
-                #     })
-                seq = train_item_seq[-max_len:]
-                samples.append({
-                    'input_ids': seq,
-                })
+                train_item_seq = train_item_seq[-max_len:]
+                if len(train_item_seq) < 2: continue
+                for i in range(2, len(train_item_seq)+1):
+                    input_seq = train_item_seq[:i]
+                    # input_seq = input_seq[-max_len:]
+                    samples.append({
+                        'input_ids': input_seq,
+                    })
+                # seq = train_item_seq[-max_len:]
+                # samples.append({
+                #     'input_ids': seq,
+                # })
             elif self.mode == 'valid':
                 # 验证集: 使用到倒数第二个 item 的序列
                 if len(item_seq) < 3: continue

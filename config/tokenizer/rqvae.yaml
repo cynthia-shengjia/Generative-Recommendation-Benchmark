@@ -1,7 +1,7 @@
 # RQ-VAE配置
-data_text_files: "./data/ToysAndGames/item2title.pkl"
-text_encoder_model: "/home/zsj/huggingface-models/sentence-t5-base"
-interaction_files: "./data/ToysAndGames/user2item.pkl"
+data_text_files: "./data/Toy/item2title.pkl"
+text_encoder_model: "/home/zhenxiangxv/model/sentence-t5-base"
+interaction_files: "./data/Toy/user2item.pkl"
 sent_emb_dim: 768
 n_codebooks: 3
 codebook_size: 256
@@ -14,9 +14,12 @@ commitment_beta: 0.25
 rq_kmeans_init: true
 kmeans_iters: 10
 learning_rate: 0.001
-epochs: 1
+epochs: 20000
 batch_size: 1024
 log_interval: 10
-save_interval: 5000
+save_interval: 2000
 embedding_strategy: "mean_pooling"
 final_model_decision: "save_final"
+cf_emb_path: "sasrec_cf_embedding.pt"
+diversity_beta: 1e-4
+cf_alpha: 0.02

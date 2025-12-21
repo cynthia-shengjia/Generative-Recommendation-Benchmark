@@ -5,7 +5,7 @@ import pickle
 import torch
 import numpy as np
 from typing import Callable, Optional, Dict, List, Any, Tuple, Union
-
+from sentence_transformers import SentenceTransformer
 
 class ItemEmbeddingDataset(Dataset):
     """
@@ -44,7 +44,10 @@ class ItemEmbeddingDataset(Dataset):
         
         # Set device
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        if 't5' in self.text_encoder_model_name.lower():
+        if 'sentence' in self.text_encoder_model_name.lower():
+            self.text_model = SentenceTransformer(self.text_encoder_model_name)
+            self.model_config = self.text_model[0].auto_model.config
+        elif 't5' in self.text_encoder_model_name.lower():
             self.text_model = T5EncoderModel.from_pretrained(self.text_encoder_model_name)
             self.model_config = self.text_model.config
         else:
@@ -127,16 +130,20 @@ class ItemEmbeddingDataset(Dataset):
                 item_id = int(row['ItemID'])
                 
                 def safe_get_field(field_name: str, default: str = "Unknown") -> str:
-                    """安全获取字段值，处理空字符串情况"""
                     value = row.get(field_name, "")
-                    return default if value == "" else str(value).strip()
+                    if isinstance(value, list):
+                        return ", ".join(value) if value else default
+                    if value == "" or str(value).lower() == "nan":
+                        return default
+                    return str(value).strip()
                 
                 # 获取各个字段
                 title = safe_get_field('Title', 'Unknown')
                 categories = safe_get_field('Categories', 'Unknown')
                 brand = safe_get_field('Brand', 'Unknown')
-                description = safe_get_field('Description', '')  # 描述为空时设为空字符串，不是"Unknown"
-                
+                description = safe_get_field('Description', '') 
+                year = safe_get_field('Year', 'Unknown')
+                Genres = safe_get_field('Genres', 'Unknown')
                 basic_info_parts = []
                 
                 basic_info_parts.append(f"Atomic Item ID: {item_id}")
@@ -150,6 +157,10 @@ class ItemEmbeddingDataset(Dataset):
                 
                 if brand != 'Unknown':
                     basic_info_parts.append(f"Brand: {brand}")
+                if year != 'Unknown':
+                    basic_info_parts.append(f"Year: {year}")
+                if Genres != 'Unknown':
+                    basic_info_parts.append(f"Genres: {Genres}")
                 
                 basic_info = ", ".join(basic_info_parts)
                 
@@ -266,15 +277,15 @@ class ItemEmbeddingDataset(Dataset):
         print("Processing basic info embeddings...")
         basic_embeddings = self._process_text_batch(basic_infos, item_ids, batch_size)
         
-        print("Processing description embeddings...")
-        # 只处理非空描述
+        # print("Processing description embeddings...")
+        # # 只处理非空描述
         
-        desc_embeddings = self._process_text_batch(descriptions, item_ids, batch_size)
-        
+        # desc_embeddings = self._process_text_batch(descriptions, item_ids, batch_size)
+        desc_embeddings = None
         # 合并嵌入
         for item_id in item_ids:
             basic_emb = basic_embeddings.get(item_id)
-            desc_emb = desc_embeddings.get(item_id)
+            # desc_emb = desc_embeddings.get(item_id)
             
             if basic_emb is None:
                 basic_emb = np.zeros(self.model_config.hidden_size)
@@ -284,69 +295,85 @@ class ItemEmbeddingDataset(Dataset):
             else:
                 item_embeddings[item_id] = basic_emb
         
-        num_with_desc = len([item_id for item_id in item_ids if desc_embeddings.get(item_id) is not None])
+        # num_with_desc = len([item_id for item_id in item_ids if desc_embeddings.get(item_id) is not None])
         print(f"Final embeddings generated for {len(item_embeddings)} items")
-        print(f"Items with descriptions: {num_with_desc}")
-        print(f"Items without descriptions: {len(item_embeddings) - num_with_desc}")
+        # print(f"Items with descriptions: {num_with_desc}")
+        # print(f"Items without descriptions: {len(item_embeddings) - num_with_desc}")
         
         return item_embeddings
 
-    def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
-        """
-        Process a batch of texts and return embeddings.
-        Only processes non-empty texts and returns None for empty texts.
+    # def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
+    #     """
+    #     Process a batch of texts and return embeddings.
+    #     Only processes non-empty texts and returns None for empty texts.
         
-        Args:
-            texts: List of texts to process
-            item_ids: Corresponding item IDs
-            batch_size: Batch size for processing
+    #     Args:
+    #         texts: List of texts to process
+    #         item_ids: Corresponding item IDs
+    #         batch_size: Batch size for processing
             
-        Returns:
-            Dictionary mapping item IDs to embeddings (only for non-empty texts)
-        """
-        embeddings_dict = {}
+    #     Returns:
+    #         Dictionary mapping item IDs to embeddings (only for non-empty texts)
+    #     """
+    #     embeddings_dict = {}
         
-        # 预先过滤空文本，保留原始索引
-        valid_pairs = []
-        for i, (text, item_id) in enumerate(zip(texts, item_ids)):
-            if text and text.strip():  # 只处理非空文本
-                valid_pairs.append((text, item_id))
+    #     # 预先过滤空文本，保留原始索引
+    #     valid_pairs = []
+    #     for i, (text, item_id) in enumerate(zip(texts, item_ids)):
+    #         if text and text.strip():  # 只处理非空文本
+    #             valid_pairs.append((text, item_id))
         
-        if not valid_pairs:
-            print("Warning: No valid texts to process")
-            return embeddings_dict  # 返回空字典
+    #     if not valid_pairs:
+    #         print("Warning: No valid texts to process")
+    #         return embeddings_dict  # 返回空字典
+        
+    #     valid_texts, valid_ids = zip(*valid_pairs)
+    #     valid_texts = list(valid_texts)
+    #     valid_ids = list(valid_ids)
+        
+    #     print(f"Processing {len(valid_texts)} valid texts out of {len(texts)} total texts...")
+        
+    #     for i in range(0, len(valid_texts), batch_size):
+    #         batch_texts = valid_texts[i:i+batch_size]
+    #         batch_ids = valid_ids[i:i+batch_size]
+            
+    #         # Tokenize the batch
+    #         inputs = self.text_tokenizer(
+    #             batch_texts, 
+    #             return_tensors="pt", 
+    #             padding=True, 
+    #             truncation=True, 
+    #             max_length=self.max_seq_length
+    #         ).to(self.device)
+            
+    #         # Get model outputs
+    #         with torch.no_grad():
+    #             outputs = self.text_model(**inputs)
+            
+    #         # Extract embeddings based on the selected strategy
+    #         embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
+            
+    #         # Store embeddings (只存储有效文本的embedding)
+    #         for j, item_id in enumerate(batch_ids):
+    #             embeddings_dict[item_id] = embeddings[j].cpu().numpy()
+        
+    #     return embeddings_dict
+    def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
+        valid_pairs = [(t, i) for t, i in zip(texts, item_ids) if t and t.strip()]
+        if not valid_pairs: return {}
         
         valid_texts, valid_ids = zip(*valid_pairs)
-        valid_texts = list(valid_texts)
-        valid_ids = list(valid_ids)
         
-        print(f"Processing {len(valid_texts)} valid texts out of {len(texts)} total texts...")
+        # 直接调用 encode，它会自动处理 batching 和 pooling
+        embeddings = self.text_model.encode(
+            list(valid_texts),
+            batch_size=batch_size,
+            show_progress_bar=True,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
         
-        for i in range(0, len(valid_texts), batch_size):
-            batch_texts = valid_texts[i:i+batch_size]
-            batch_ids = valid_ids[i:i+batch_size]
-            
-            # Tokenize the batch
-            inputs = self.text_tokenizer(
-                batch_texts, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True, 
-                max_length=self.max_seq_length
-            ).to(self.device)
-            
-            # Get model outputs
-            with torch.no_grad():
-                outputs = self.text_model(**inputs)
-            
-            # Extract embeddings based on the selected strategy
-            embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
-            
-            # Store embeddings (只存储有效文本的embedding)
-            for j, item_id in enumerate(batch_ids):
-                embeddings_dict[item_id] = embeddings[j].cpu().numpy()
-        
-        return embeddings_dict
+        return {item_id: emb for item_id, emb in zip(valid_ids, embeddings)}
     def __len__(self) -> int:
         """
         Get the number of items in the dataset.

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Dict, List, Any
-from genrec.tokenizers.TigerTokenizer import TigerTokenizer
 import torch
 
 @dataclass

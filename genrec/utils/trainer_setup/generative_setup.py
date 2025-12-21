@@ -9,7 +9,8 @@ from omegaconf import DictConfig
 from genrec.utils.metrics import compute_metrics
 from genrec.utils.callbacks.generative.generative_callback import (
     GenerativeLoggingCallback,
-    EvaluateEveryNEpochsCallback
+    EvaluateEveryNEpochsCallback,
+    DelayedEvaluateEveryNEpochsCallback
 )
 
 def setup_training(
@@ -90,7 +91,8 @@ def setup_training(
         GenerativeLoggingCallback(logger),
         EvaluateEveryNEpochsCallback(
             n_epochs=model_config.get("evaluation_epoch", 5)
-        )
+        ),
+        # DelayedEvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5), start_epoch=120)
     ]
     
     # ===== 4. 使用 partial instantiate 创建 Trainer =====

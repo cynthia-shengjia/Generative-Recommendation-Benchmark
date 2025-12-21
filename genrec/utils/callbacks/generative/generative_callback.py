@@ -47,3 +47,37 @@ class GenerativeLoggingCallback(TrainerCallback):
                 _logs = {k: v for k, v in logs.items() if k not in ["epoch", "step"]}  
                 log_str = f"步骤 {state.global_step} (Epoch {state.epoch:.2f}): " + " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in _logs.items())  
                 self.logger.info(log_str)
+
+class DelayedEvaluateEveryNEpochsCallback(TrainerCallback):
+    def __init__(self, n_epochs=5, start_epoch=0):
+        """
+        Args:
+            n_epochs (int): 每隔多少个 epoch 评估一次
+            start_epoch (int): 从第几个 epoch 开始才允许评估
+        """
+        self.n_epochs = n_epochs
+        self.start_epoch = start_epoch
+        self.last_eval_epoch = -1
+    
+    def on_epoch_end(self, args, state, control, **kwargs):
+        # state.epoch 通常是 float，取整以确保逻辑正确
+        current_epoch = int(round(state.epoch))
+        
+        # 逻辑 1: 如果还没达到起始 epoch，强制关闭评估
+        if current_epoch < self.start_epoch:
+            control.should_evaluate = False
+        
+        # 逻辑 2: 达到起始 epoch 后，按间隔评估
+        elif current_epoch % self.n_epochs == 0:
+            control.should_evaluate = True
+            self.last_eval_epoch = current_epoch
+        else:
+            control.should_evaluate = False
+            
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        # 保持你原有的逻辑：仅在刚刚触发了评估的这个 epoch 保存
+        # 注意：state.epoch 在这里也是 float，最好转 int 比较，或者直接设为 True
+        # 因为如果进入了 on_evaluate，说明前面的逻辑已经同意评估了
+        if int(round(state.epoch)) == self.last_eval_epoch:
+             control.should_save = True
+>>>>>>> 255d967 (add letter and update sasrec)

@@ -16,7 +16,7 @@ tie_word_embeddings: true
 batch_size: 1024
 test_batch_size: 256
 learning_rate: 2e-3
-num_epochs: 100
+num_epochs: 200
 num_steps: null
 k_list: [1,5,10]
 use_generative: true
@@ -26,3 +26,5 @@ weight_decay: 0.2
 warmup_ratio: 0.05
 early_stop_upper_steps: 5
 evaluation_epoch: 1
+use_user_tokens: false
+tau: 0.7

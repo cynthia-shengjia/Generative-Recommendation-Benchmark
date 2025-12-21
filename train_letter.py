@@ -17,6 +17,7 @@ from genrec.utils.common_utils import set_seed
 from genrec.utils.logging_utils import setup_logging
 from genrec.utils.evaluation_utils import evaluate_model_with_constrained_beam_search
 from genrec.utils.models_setup.conditional_t5_setup import create_t5_model
+from genrec.utils.models_setup.letter_setup import create_letter_model
 from genrec.utils.trainer_setup.generative_setup import setup_training  # 🔥 修改导入
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -124,12 +125,12 @@ def stage2_train_generation_model(
     # ===== 创建模型 =====
     use_user_tokens = model_config['use_user_tokens']
     if use_user_tokens:
-        model = create_t5_model(
+        model = create_letter_model(
         vocab_size=tokenizer.vocab_size,
         model_config=model_config,
         )
     else:
-        model = create_t5_model(
+        model = create_letter_model(
             vocab_size=tokenizer.vocab_size - tokenizer.num_user_tokens,
             model_config=model_config,
         )

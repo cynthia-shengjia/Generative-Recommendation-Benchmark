@@ -25,10 +25,10 @@ class SASRecConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size=3000,
-        hidden_size=768,
-        num_hidden_layers=8,
-        num_attention_heads=6,
-        hidden_dropout_prob=0.5,
+        hidden_size=64,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        hidden_dropout_prob=0.2,
         initializer_range=0.02,
         pad_token_id=0,
         norm_emb: bool = False,
@@ -118,17 +118,70 @@ class SASRec4HF(PreTrainedModel):
                 
         else:
             # [B, N, D] @ [D, V] -> [B, N, V]
-            logits = torch.matmul(sequence_hidden_states, item_embeddings.t())
-            if self.SASRec.config.norm_emb:
-                logits = logits / self.config.temperature
-            loss = self.compute_loss(sequence_hidden_states, labels, item_embeddings)
+            # last_hidden_state = sequence_hidden_states[:, -1, :]
+            # logits = torch.matmul(last_hidden_state, item_embeddings.t())
+            # if self.SASRec.config.norm_emb:
+            #     logits = logits / self.config.temperature
+            # loss = self.ce_loss_fn(logits, labels[:, -1])
 
+            # 只计算最后一位的BCE
+            # last_hidden_state = sequence_hidden_states[:, -1:, :] # [B, 1, D]
+            # last_labels = labels[:, -1:] # [B, 1]
+            # loss = self.compute_loss(last_hidden_state, last_labels, item_embeddings)
+            # logits = None
+            # 全部计算的BCE
+            loss = self.compute_loss(sequence_hidden_states, labels, item_embeddings)
+            logits = None
+
+
+            # logits = torch.matmul(sequence_hidden_states, item_embeddings.t())
+            # if self.SASRec.config.norm_emb:
+            #     logits = logits / self.config.temperature
+            # loss = self.compute_loss(sequence_hidden_states, labels, item_embeddings)
+        # last_hidden_state = sequence_hidden_states[:, -1, :]
+        # logits = torch.matmul(last_hidden_state, item_embeddings.t())
+        # if self.SASRec.config.norm_emb:
+        #     logits = logits / self.config.temperature
+        # if labels is not None:
+        #     # 提取最后一个位置的 Label
+        #     # labels: [B, N] -> [B]
+        #     last_labels = labels[:, -1]
+            
+        #     # 直接使用 CrossEntropyLoss 计算
+        #     loss = self.ce_loss_fn(logits, last_labels)
         return SASRecOutput(
             loss=loss,
             logits=logits,
             cache_states=None
         )
-    
+    # def compute_loss(
+    #         self,
+    #         hidden_states: torch.Tensor,  # [B, N, D]
+    #         labels: torch.Tensor,  # [B, N]
+    #         item_embeddings: torch.Tensor,  # [V, D]
+    #     ) -> torch.Tensor:
+            
+    #         # 1. 计算全量 Logits
+    #         # hidden_states: [B, N, D]
+    #         # item_embeddings.t(): [D, V]
+    #         # logits: [B, N, V]
+    #         logits = torch.matmul(hidden_states, item_embeddings.t())
+
+    #         # 2. 如果开启了 Embedding 归一化，需要除以温度系数
+    #         if self.SASRec.config.norm_emb:
+    #             logits = logits / self.config.temperature
+
+    #         # 3. 调整形状以适应 CrossEntropyLoss
+    #         # Logits: [B * N, V]
+    #         # Labels: [B * N]
+    #         logits = logits.view(-1, logits.size(-1))
+    #         labels = labels.view(-1)
+
+    #         # 4. 计算 Loss
+    #         # 这里会自动处理 Softmax，且根据 __init__ 设置忽略 padding
+    #         loss = self.ce_loss_fn(logits, labels)
+            
+    #         return loss   
     def compute_loss(
         self,
         hidden_states: torch.Tensor,  # [B, D] 或 [B, N, D]
