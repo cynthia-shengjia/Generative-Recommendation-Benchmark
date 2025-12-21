@@ -65,20 +65,10 @@ class SeqDataset(BaseSeqRecDataset):
         
         # 将目标物品转换为token序列
         target_tokens = self._get_item_tokens(target_item)
-
-        result = {
+        
+        return {
             'user_token': self.tokenizer.get_user_token(user_id),
             'source_tokens': source_tokens,
             'target_tokens': target_tokens,
             'target_id': target_item,
         }
-        if self.mode == 'train' and target_item in self.negative_map:
-            # 1. 获取负样本列表 [id1, id2, id3...]
-            neg_item_ids = self.negative_map[target_item]
-            
-            # 2. 遍历列表，将每个 ID 转为 Token 序列
-            # 结果结构：List[List[int]] -> [[t1, t2...], [t1, t2...]]
-            neg_tokens_list = [self._get_item_tokens(nid) for nid in neg_item_ids]
-            
-            result['negative_tokens'] = neg_tokens_list
-        return result

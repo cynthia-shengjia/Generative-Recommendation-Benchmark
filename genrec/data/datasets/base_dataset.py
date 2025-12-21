@@ -49,7 +49,10 @@ class BaseSeqRecDataset(Dataset):
         
         # 计算每个物品的token数量
         self.tokens_per_item = self._get_tokens_per_item()
-        self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
+        if config['use_user_tokens']:
+            self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
+        else:
+            self.max_token_len = self.tokens_per_item * self.config['max_seq_len']
         
         # 创建样本
         self.all_items = self._get_all_items()
