@@ -27,7 +27,7 @@ class HSTUDataset(Dataset):
             user_seqs_dataframe = pickle.load(f)
         for _, row in user_seqs_dataframe.iterrows():
             user_id = int(row['UserID'])
-            item_seq = list(row["ItemID"])
+            item_seq = [int(iid) + 1 for iid in row["ItemID"]]
             timestamp_seq = list(row["Timestamp"]) 
             user_seqs[user_id] = (item_seq, timestamp_seq)
         return user_seqs
@@ -117,7 +117,7 @@ class SASRecDataset(Dataset):
             user_seqs_dataframe = pickle.load(f)
         for _, row in user_seqs_dataframe.iterrows():
             user_id = int(row['UserID'])
-            item_seq = list(row["ItemID"])
+            item_seq = [int(iid) + 1 for iid in row["ItemID"]]
             user_seqs[user_id] = item_seq
         return user_seqs
     

@@ -100,8 +100,8 @@ def load_data_and_get_vocab_size(file_path: str) -> int:
 
     max_item_id = df['ItemID'].explode().max()
     
-
-    vocab_size = int(max_item_id) + 1
+    # max_item_id+1为item数，再留一个padding
+    vocab_size = int(max_item_id) + 2
     
     print(f"从数据中找到的最大 ItemID: {max_item_id}")
     print(f"词汇表大小 (vocab_size): {vocab_size}")
@@ -120,7 +120,7 @@ def print_model_parameters(model: nn.Module):
     print("-" * 50)
 
 if __name__ == "__main__":
-    REAL_DATA_FILE = "/home/zhenxiangxv/GR-Benchmark/new_GR/Generative-Recommendation-Benchmark/data/Toy/user2item.pkl" 
+    REAL_DATA_FILE = "/home/zhenxiangxv/GR-Benchmark/new_GR/Generative-Recommendation-Benchmark/data/Beauty/user2item.pkl" 
     OUTPUT_DIR = "./sasrec_test_run"
     MAX_SEQ_LEN = 20
     EMBEDDING_DIM = 32
@@ -166,13 +166,13 @@ if __name__ == "__main__":
         metric_for_best_model="NDCG@10", 
         greater_is_better=True,       
         report_to="none",
-        learning_rate=5e-4, 
+        learning_rate=1e-3, 
         ddp_find_unused_parameters=False,
         weight_decay=0.01,
         # warmup_steps=500, 
     )
     callbacks = [
-        EarlyStoppingCallback(early_stopping_patience=20), 
+        EarlyStoppingCallback(early_stopping_patience=100), 
         EvaluateEveryNEpochsCallback(n_epochs=EVAL_EVERY_N_EPOCHS)
     ]
 
