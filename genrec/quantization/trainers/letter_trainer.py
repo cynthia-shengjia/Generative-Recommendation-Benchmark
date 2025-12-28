@@ -41,8 +41,13 @@ class LETTERRQVAETrainer:
 
         self.cf_emb_path = self.config.get('cf_emb_path')
         if self.cf_emb_path and os.path.exists(self.cf_emb_path):
-            self.cf_embedding = torch.load(self.cf_emb_path).squeeze().detach().numpy()
+            full_embeddings = torch.load(self.cf_emb_path).squeeze().detach()
+            self.cf_embedding = full_embeddings[1:].numpy()
+            # 去除padding
+            # self.cf_embedding = torch.load(self.cf_emb_path).squeeze().detach().numpy()
             logging.info(f"Successfully loaded CF embedding from: {self.cf_emb_path}.")
+            logging.info(f"Original shape: {list(full_embeddings.shape)} -> "
+                         f"After slicing [1:]: {list(self.cf_embedding.shape)}")
         else:
             raise FileNotFoundError(f"[ERROR] CF embedding path does not exist: {self.cf_emb_path}")
     def _calculate_codebook_utilization(self, train_dataloader, log_output=True):
