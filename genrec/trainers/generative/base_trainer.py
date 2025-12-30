@@ -143,4 +143,5 @@ class BaseGenerativeTrainer(Trainer):
         num_return_sequences = gen_kwargs["num_return_sequences"]
         generated_ids_reshaped = generated_sequences.view(batch_size, num_return_sequences, -1)
         
-        return (loss, generated_ids_reshaped, labels)
+        # return (loss, generated_ids_reshaped, labels)
+        return (loss, generated_ids_reshaped, inputs["label_id"])

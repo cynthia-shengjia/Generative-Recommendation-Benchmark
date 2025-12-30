@@ -213,7 +213,8 @@ def evaluate_model_with_constrained_beam_search(
         batch_predictions = []
         batch_labels = []
         for i in range(batch_size):
-            true_item_id = true_item_ids[i]
+            # true_item_id = true_item_ids[i]
+            true_item_id = true_item_ids[i].item() if torch.is_tensor(true_item_ids[i]) else true_item_ids[i]
             true_item_tokens = item_to_tokens_map.get(true_item_id, []) 
             batch_labels.append({
                 'id': true_item_id,

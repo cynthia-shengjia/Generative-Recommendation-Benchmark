@@ -225,19 +225,38 @@ def stage2_train_generation_model(
     
     # ===== 测试评估 =====
     if accelerator.is_main_process:
-        logger.info("使用约束beam search进行测试评估...")
+        logger.info("进行测试评估...")
+    test_results = trainer.predict(test_dataset)
+    if accelerator.is_main_process:
+        metrics = test_results.metrics
+        
+        k_values = sorted(list(set(
+            int(key.split('@')[-1]) for key in metrics.keys() if '@' in key
+        )))
+
+        logger.info("="*30 + " 测试集评估结果 " + "="*30)
+        
+        for k in k_values:
+            hit_val = metrics.get(f"test_hit@{k}", 0.0)
+            ndcg_val = metrics.get(f"test_ndcg@{k}", 0.0)
+            
+            logger.info(f"Hit@{k}: {hit_val:.4f}, NDCG@{k}: {ndcg_val:.4f}")
+            
+        logger.info("="*75)
+    # if accelerator.is_main_process:
+    #     logger.info("使用约束beam search进行测试评估...")
     
-    evaluate_model_with_constrained_beam_search(
-        model=model,
-        eval_dataloader=test_dataloader,
-        accelerator=accelerator,
-        tokenizer=tokenizer,
-        k_list=model_config.get("k_list", [5, 10, 20]),
-        num_beams=model_config.get("num_beams", 10),
-        max_gen_length=model_config.get("max_gen_length", 5),
-        logger=logger,
-        mode="Test"
-    )
+    # evaluate_model_with_constrained_beam_search(
+    #     model=model,
+    #     eval_dataloader=test_dataloader,
+    #     accelerator=accelerator,
+    #     tokenizer=tokenizer,
+    #     k_list=model_config.get("k_list", [5, 10, 20]),
+    #     num_beams=model_config.get("num_beams", 10),
+    #     max_gen_length=model_config.get("max_gen_length", 5),
+    #     logger=logger,
+    #     mode="Test"
+    # )
     
     # ===== 保存最终模型 =====
     if "NNI_PLATFORM" not in os.environ:

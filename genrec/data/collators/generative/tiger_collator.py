@@ -72,9 +72,7 @@ class TigerDataCollator(BaseSeqRecDataCollator):
               
             batch["labels"] = torch.tensor(labels_list, dtype=torch.long)
         
-        # 测试模式（以及可能的验证模式）需要 label_id 用于评估
-        if self.mode in ["test", "valid"]:
-            label_ids = [feature["target_id"] for feature in features]
-            batch["label_id"] = label_ids
+        label_ids = [feature["target_id"] for feature in features]
+        batch["label_id"] = label_ids
           
         return batch
