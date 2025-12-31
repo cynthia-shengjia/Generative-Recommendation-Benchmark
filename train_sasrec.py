@@ -38,51 +38,86 @@ class EvaluateEveryNEpochsCallback(TrainerCallback):
 
         control.should_save = state.epoch == self.last_eval_epoch
 def compute_metrics(eval_pred):
-
-    logits, labels = eval_pred.predictions, eval_pred.label_ids
+    top_k_indices, labels = eval_pred.predictions, eval_pred.label_ids
     
-    if isinstance(logits, tuple):
-        logits = logits[0]
-
-    valid_mask = labels != -100 
-
-    has_valid_label = valid_mask.any(axis=1)
-
-    valid_labels = labels[has_valid_label]
-    valid_logits = logits[has_valid_label]
-    valid_mask = valid_mask[has_valid_label]
+    valid_mask = (labels != -100)
 
     last_item_indices = valid_mask.shape[1] - 1 - np.argmax(np.fliplr(valid_mask), axis=1)
-
-    batch_indices = np.arange(valid_labels.shape[0])
-    true_labels = valid_labels[batch_indices, last_item_indices]
-    pred_logits = valid_logits
-
-    K_VALUES = [1, 5, 10]
-    sorted_indices = np.argsort(pred_logits, axis=1)[:, ::-1] 
+    
+    batch_indices = np.arange(labels.shape[0])
+    true_labels = labels[batch_indices, last_item_indices] # [Batch]
     
     results = {}
-    
-    true_labels_reshaped = true_labels[:, np.newaxis]
+    K_VALUES = [1, 5, 10]
+    true_labels_reshaped = true_labels[:, np.newaxis] # [Batch, 1]
     
     for k in K_VALUES:
-        top_k_preds = sorted_indices[:, :k]
+        top_k_preds = top_k_indices[:, :k] # [Batch, k]
 
         hits = (true_labels_reshaped == top_k_preds).any(axis=1)
-        hr_at_k = np.mean(hits)
-        results[f"Hit@{k}"] = hr_at_k
+        results[f"Hit@{k}"] = np.mean(hits)
 
         hit_mask = (true_labels_reshaped == top_k_preds)
-
         hit_positions = np.where(hit_mask) 
-
+        
         ranks = hit_positions[1] 
-
-        dcg = 1.0 / np.log2(ranks + 2)
-        ndcg_at_k = np.sum(dcg) / len(true_labels)
+        
+        if len(ranks) > 0:
+            dcg = 1.0 / np.log2(ranks + 2)
+            ndcg_at_k = np.sum(dcg) / len(true_labels)
+        else:
+            ndcg_at_k = 0.0
+            
         results[f"NDCG@{k}"] = ndcg_at_k
 
     return results
+
+# def compute_metrics(eval_pred):
+
+#     logits, labels = eval_pred.predictions, eval_pred.label_ids
+    
+#     if isinstance(logits, tuple):
+#         logits = logits[0]
+
+#     valid_mask = labels != -100 
+
+#     has_valid_label = valid_mask.any(axis=1)
+
+#     valid_labels = labels[has_valid_label]
+#     valid_logits = logits[has_valid_label]
+#     valid_mask = valid_mask[has_valid_label]
+
+#     last_item_indices = valid_mask.shape[1] - 1 - np.argmax(np.fliplr(valid_mask), axis=1)
+
+#     batch_indices = np.arange(valid_labels.shape[0])
+#     true_labels = valid_labels[batch_indices, last_item_indices]
+#     pred_logits = valid_logits
+
+#     K_VALUES = [1, 5, 10]
+#     sorted_indices = np.argsort(pred_logits, axis=1)[:, ::-1] 
+    
+#     results = {}
+    
+#     true_labels_reshaped = true_labels[:, np.newaxis]
+    
+#     for k in K_VALUES:
+#         top_k_preds = sorted_indices[:, :k]
+
+#         hits = (true_labels_reshaped == top_k_preds).any(axis=1)
+#         hr_at_k = np.mean(hits)
+#         results[f"Hit@{k}"] = hr_at_k
+
+#         hit_mask = (true_labels_reshaped == top_k_preds)
+
+#         hit_positions = np.where(hit_mask) 
+
+#         ranks = hit_positions[1] 
+
+#         dcg = 1.0 / np.log2(ranks + 2)
+#         ndcg_at_k = np.sum(dcg) / len(true_labels)
+#         results[f"NDCG@{k}"] = ndcg_at_k
+
+#     return results
 def load_data_and_get_vocab_size(file_path: str) -> int:
 
     print(f"正在从文件加载数据: {file_path}")
@@ -107,7 +142,14 @@ def load_data_and_get_vocab_size(file_path: str) -> int:
     print(f"词汇表大小 (vocab_size): {vocab_size}")
     
     return vocab_size
-
+def preprocess_logits_for_metrics(logits, labels):
+    """
+    在搜集 logits 之前先在 GPU 上取 topk，极大减少显存占用
+    """
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    _, indices = torch.topk(logits, k=10, dim=-1) 
+    return indices
 def print_model_parameters(model: nn.Module):
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -184,6 +226,7 @@ if __name__ == "__main__":
         eval_dataset=test_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics
     )
     
 
