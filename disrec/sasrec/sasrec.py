@@ -84,16 +84,16 @@ class SASRecModel(torch.nn.Module):
         # positions = single_seq.unsqueeze(0).repeat(log_seqs.shape[0], 1)
         # seqs += self.pos_emb(positions)
 
-        # seqs = self.emb_dropout(seqs)  # 使得embedding中某些元素随机归0
+        # seqs = self.emb_dropout(seqs) 
         timeline_mask = (log_seqs == self.config.pad_token_id)  # batch_size x max_len
-        seqs *= ~timeline_mask.unsqueeze(-1)  # broadcast in last dim ；True表示序列中不为padding
+        seqs *= ~timeline_mask.unsqueeze(-1)  # broadcast in last dim ；True means not padding
 
         tl = seqs.shape[1]  # time dim len for enforce causality
         causal_mask  = ~torch.tril(torch.ones((tl, tl), dtype=torch.bool, device=device))
         for i in range(len(self.attention_layers)):
             seqs = torch.transpose(seqs, 0, 1)
             Q = self.attention_layernorms[i](seqs)
-            #key_padding_mask导致loss全0
+
             mha_outputs, attn_output_weights = self.attention_layers[i](
                 Q, seqs, seqs, attn_mask=causal_mask
             )  # query key value

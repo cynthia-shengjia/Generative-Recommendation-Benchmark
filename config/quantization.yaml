@@ -2,8 +2,9 @@ defaults:
   - _self_
   - tokenizer: rqvae
 
+type: "tiger"
 dataset: "Beauty"
-output_dir: "/home/zhenxiangxv/GR-Benchmark/pushVersion/Generative-Recommendation-Benchmark/Beauty"
+output_dir: "./Beauty"
 cuda: "0"
 
 force_retrain_tokenizer: false

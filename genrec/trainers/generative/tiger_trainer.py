@@ -75,9 +75,9 @@ class TigerTrainer(BaseGenerativeTrainer):
         
         loss_mask = inputs.pop("loss_mask", None)
         labels = inputs.get("labels")
-        # 2. 正常运行模型前向传播
+
         outputs = model(**inputs)
-        logits = outputs.logits # 形状: [batch, seq_len, vocab_size]
+        logits = outputs.logits 
         loss = None
         if labels is not None:
             #loss_mask [batch_size, seq_len, vocab_size]

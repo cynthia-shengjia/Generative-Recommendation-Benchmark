@@ -14,9 +14,8 @@ class SDPODataCollator(BaseSeqRecDataCollator):
     mode: str = "train"  # 'train', 'valid', 'test'
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         """
-        将 features 转换为 SDPO batch
         
-        输入 features: List of
+        input features: List of
             {
                 'source_tokens': [...],
                 'target_tokens': [...],  # chosen
@@ -25,7 +24,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
                 'target_id': int,
             }
         
-        输出 batch:
+        output batch:
             {
                 'input_ids': [B, max_seq_len],
                 'attention_mask': [B, max_seq_len],
@@ -35,18 +34,17 @@ class SDPODataCollator(BaseSeqRecDataCollator):
         """
         batch_size = len(features)
         
-        # 找出最大负样本数量
         max_neg_num = max(
             len(feature.get("rejected_tokens", {})) for feature in features
         )
         
-        # 处理 Encoder 输入（共享）
+        # Encoder input (share)
         input_ids_list = []
         for feature in features:
             result = self.process_encoder_input(feature["source_tokens"])
             input_ids_list.append(result["input_ids"])
         
-        # 处理 Chosen Labels
+        # Chosen Labels
         chosen_labels_list = []
         chosen_unpadded_lengths = []
         
@@ -55,7 +53,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
             chosen_labels_list.append(result["labels"])
             chosen_unpadded_lengths.append(result["unpadded_length"])
         
-        # 处理 Rejected Labels
+        # Rejected Labels
         rejected_labels_batch = []
         rejected_unpadded_lengths_batch = []
         
@@ -69,7 +67,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
                 sample_rejected_labels.append(result["labels"])
                 sample_rejected_unpadded_lengths.append(result["unpadded_length"])
             
-            # 补齐到 max_neg_num
+            # max_neg_num
             num_rejected = len(rejected_tokens_dict)
             for _ in range(max_neg_num - num_rejected):
                 result = self.process_decoder_target([])
@@ -79,7 +77,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
             rejected_labels_batch.append(sample_rejected_labels)
             rejected_unpadded_lengths_batch.append(sample_rejected_unpadded_lengths)
         
-        # 找出最大 label 长度
+        # find max label length
         max_label_len = max(chosen_unpadded_lengths)
         for sample_lengths in rejected_unpadded_lengths_batch:
             if sample_lengths:
@@ -97,7 +95,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
                     [self.label_pad_token_id] * padding_len
                 )
         
-        # 转换为 tensor
+
         batch = {
             "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
             "attention_mask": (
@@ -107,7 +105,7 @@ class SDPODataCollator(BaseSeqRecDataCollator):
             "rejected_labels": torch.tensor(rejected_labels_batch, dtype=torch.long),
         }
         
-        # 测试模式（以及可能的验证模式）需要 label_id 用于评估
+
         if self.mode in ["test", "valid"]:
             label_ids = [feature["target_id"] for feature in features]
             batch["label_id"] = label_ids

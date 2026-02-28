@@ -1,5 +1,5 @@
-# config/generative/tiger.yaml
-type: "tiger"
+# config/generative/letter.yaml
+type: "letter"
 trainer:
   _target_: genrec.trainers.generative.tiger_trainer.TigerTrainer
   _partial_: true

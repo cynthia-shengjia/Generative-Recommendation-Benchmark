@@ -9,7 +9,6 @@ class SeqDataset(BaseSeqRecDataset):
         
         for user_id, item_seq in self.user_seqs.items():
             if self.mode == 'train':
-                # 先截断max_item_seq_len 长度，再滑窗
                 item_seq = item_seq[-(max_item_seq_len+2):-2]
                 for i in range(1, len(item_seq)):
                     history = item_seq[:i]
@@ -23,7 +22,6 @@ class SeqDataset(BaseSeqRecDataset):
                     })
             
             elif self.mode == 'valid':
-                # 验证集：倒数第二个物品作为目标
                 if len(item_seq) < 3:
                     continue
                 history = item_seq[:-2]
@@ -37,7 +35,6 @@ class SeqDataset(BaseSeqRecDataset):
                 })
             
             elif self.mode == 'test':
-                # 测试集：最后一个物品作为目标
                 if len(item_seq) < 2:
                     continue
                 history = item_seq[:-1]
@@ -58,12 +55,10 @@ class SeqDataset(BaseSeqRecDataset):
         target_item = sample['target_item']
         user_id = sample['user_id']
         
-        # 将历史物品转换为token序列
         source_tokens = []
         for item in history_items:
             source_tokens.extend(self._get_item_tokens(item))
         
-        # 将目标物品转换为token序列
         target_tokens = self._get_item_tokens(target_item)
         
         return {

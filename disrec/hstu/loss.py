@@ -661,24 +661,14 @@ class SampledSoftmaxLoss(AutoregressiveLoss):
         
 import torch.nn as nn
 class FullSoftmaxLoss(AutoregressiveLoss):
-    """
-    计算标准的全量 Softmax 交叉熵损失。
-    该类的接口与 SampledSoftmaxLoss 完全兼容，可以作为直接替代品。
-    """
+
     def __init__(
         self,
         item_embeddings: nn.Embedding,
         softmax_temperature: float = 1.0,
         activation_checkpoint: bool = False,
     ) -> None:
-        """
-        初始化函数。
 
-        Args:
-            item_embeddings (nn.Embedding): 包含所有物品嵌入的 nn.Embedding 层。
-            softmax_temperature (float): 用于缩放 logits 的温度系数。
-            activation_checkpoint (bool): 是否使用激活检查点以节省内存。
-        """
         super().__init__()
         self._item_embeddings = item_embeddings
         self._softmax_temperature: float = softmax_temperature
@@ -689,39 +679,29 @@ class FullSoftmaxLoss(AutoregressiveLoss):
         output_embeddings: torch.Tensor,
         supervision_ids: torch.Tensor,
         supervision_weights: torch.Tensor,
-        # 以下参数是为了接口兼容而接收，但不会被使用
         supervision_embeddings: torch.Tensor = None,
         negatives_sampler = None,
     ) -> torch.Tensor:
-        """
-        在 "jagged" (展平的) 张量上执行核心的损失计算。
-        """
-        # 获取完整的物品嵌入矩阵
-        # all_item_embs -> (V, D)，其中 V 是词汇表大小
+
+        # all_item_embs -> (V, D)
         all_item_embs = self._item_embeddings.weight
 
-        # 计算与所有物品的 logits
         # output_embeddings [N', D], all_item_embs.T [D, V] -> logits [N', V]
         logits = torch.matmul(output_embeddings, all_item_embs.transpose(0, 1))
 
-        # 应用温度缩放
         if self._softmax_temperature != 1.0:
             logits = logits / self._softmax_temperature
-        
-        # 使用 cross_entropy 计算损失
-        # reduction='none' 使其返回每个样本的损失，以便我们可以应用 supervision_weights
+
         loss_per_token = F.cross_entropy(
             input=logits, 
             target=supervision_ids, 
             reduction='none'
         )
 
-        # 应用权重并计算最终的平均损失，与 SampledSoftmaxLoss 的加权方式完全一致
-        # (loss * weights).sum() / weights.sum()
         weighted_loss = (loss_per_token * supervision_weights).sum()
         total_weight = supervision_weights.sum()
 
-        # 避免除以零
+
         if total_weight == 0:
             return torch.tensor(0.0, device=output_embeddings.device)
             
@@ -734,17 +714,11 @@ class FullSoftmaxLoss(AutoregressiveLoss):
         supervision_ids: torch.Tensor,
         supervision_embeddings: torch.Tensor,
         supervision_weights: torch.Tensor,
-        negatives_sampler, # 接收但未使用
+        negatives_sampler,
     ) -> torch.Tensor:
-        """
-        前向传播的入口点，处理从 dense 到 jagged 的张量转换。
-        此方法的签名和逻辑与 SampledSoftmaxLoss 完全相同。
-        """
-        # 将 dense (带 padding) 的张量转换为 jagged (无 padding 的一维) 张量
+
         jagged_id_offsets = asynchronous_complete_cumsum_py(lengths)
         
-        # 准备传递给 jagged_forward 的参数
-        # 注意：我们只转换需要的参数，减少不必要的计算
         args = OrderedDict(
             [
                 (
@@ -759,7 +733,6 @@ class FullSoftmaxLoss(AutoregressiveLoss):
                     "supervision_weights",
                     dense_to_jagged_py(supervision_weights.unsqueeze(-1), [jagged_id_offsets])[0].squeeze(1),
                 ),
-                # 传递 None 给未使用的参数
                 ("supervision_embeddings", None),
                 ("negatives_sampler", None),
             ]

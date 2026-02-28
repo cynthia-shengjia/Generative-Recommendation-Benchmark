@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union, Any
 
-from disrec.hstu.hstu4hf import HSTUConfig,HSTU4HF
-from disrec.datasets.model_dataset import HSTUDataset
-from disrec.datasets.data_collator import HSTUDataCollator
+from disrec.sasrec.sasrec4hf import SASRecConfig,SASRec4HF
+from disrec.datasets.model_dataset import SASRecDataset
+from disrec.datasets.data_collator import SASRecDataCollator
 
 from transformers import TrainerCallback,EarlyStoppingCallback
 import numpy as np
@@ -38,104 +38,91 @@ class EvaluateEveryNEpochsCallback(TrainerCallback):
 
         control.should_save = state.epoch == self.last_eval_epoch
 def compute_metrics(eval_pred):
-
-    logits, labels = eval_pred.predictions, eval_pred.label_ids
+    top_k_indices, labels = eval_pred.predictions, eval_pred.label_ids
     
-    if isinstance(logits, tuple):
-        logits = logits[0]
-
-    valid_mask = labels != -100 
-
-    has_valid_label = valid_mask.any(axis=1)
-    if not np.any(has_valid_label):
-        print("警告: 在这个评估批次中没有找到有效的标签。")
-        return {}
-
-    valid_labels = labels[has_valid_label]
-    valid_logits = logits[has_valid_label]
-    valid_mask = valid_mask[has_valid_label]
+    valid_mask = (labels != -100)
 
     last_item_indices = valid_mask.shape[1] - 1 - np.argmax(np.fliplr(valid_mask), axis=1)
-
-    batch_indices = np.arange(valid_labels.shape[0])
-    true_labels = valid_labels[batch_indices, last_item_indices]
-    pred_logits = valid_logits 
-
-    K_VALUES = [1, 5, 10, 20]
-    sorted_indices = np.argsort(pred_logits, axis=1)[:, ::-1] 
+    
+    batch_indices = np.arange(labels.shape[0])
+    true_labels = labels[batch_indices, last_item_indices] # [Batch]
     
     results = {}
-    
-    true_labels_reshaped = true_labels[:, np.newaxis]
+    K_VALUES = [1, 5, 10]
+    true_labels_reshaped = true_labels[:, np.newaxis] # [Batch, 1]
     
     for k in K_VALUES:
-        top_k_preds = sorted_indices[:, :k]
+        top_k_preds = top_k_indices[:, :k] # [Batch, k]
 
         hits = (true_labels_reshaped == top_k_preds).any(axis=1)
-        hr_at_k = np.mean(hits)
-        results[f"Hit@{k}"] = hr_at_k
+        results[f"Hit@{k}"] = np.mean(hits)
 
         hit_mask = (true_labels_reshaped == top_k_preds)
-
         hit_positions = np.where(hit_mask) 
-
+        
         ranks = hit_positions[1] 
-
-        dcg = 1.0 / np.log2(ranks + 2)
-        ndcg_at_k = np.sum(dcg) / len(true_labels)
+        
+        if len(ranks) > 0:
+            dcg = 1.0 / np.log2(ranks + 2)
+            ndcg_at_k = np.sum(dcg) / len(true_labels)
+        else:
+            ndcg_at_k = 0.0
+            
         results[f"NDCG@{k}"] = ndcg_at_k
 
     return results
+
 def load_data_and_get_vocab_size(file_path: str) -> int:
 
-    print(f"正在从文件加载数据: {file_path}")
+    print(f"load from: {file_path}")
     
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"错误: 数据文件未找到，请检查路径: {file_path}")
+        raise FileNotFoundError(f"Not Found: {file_path}")
     
     df = pd.read_pickle(file_path)
-    
-    print("数据加载成功。格式预览:")
-    print(df.head(2))
+
     
 
     if 'ItemID' not in df.columns or df['ItemID'].apply(len).sum() == 0:
-        raise ValueError("错误: 'ItemID' 列不存在或所有序列都为空，无法确定词汇表大小。")
+        raise ValueError("Error: 'ItemID' Not Found")
         
 
     max_item_id = df['ItemID'].explode().max()
     
-
-    vocab_size = int(max_item_id) + 1
+    vocab_size = int(max_item_id) + 2
     
-    print(f"从数据中找到的最大 ItemID: {max_item_id}")
-    print(f"推断出的词汇表大小 (vocab_size): {vocab_size}")
+    print(f"Max ItemID: {max_item_id}")
+    print(f"vocab_size: {vocab_size}")
     
     return vocab_size
-
+def preprocess_logits_for_metrics(logits, labels):
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    _, indices = torch.topk(logits, k=10, dim=-1) 
+    return indices
 def print_model_parameters(model: nn.Module):
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     print("-" * 50)
-    print("模型参数统计:")
-    print(f"  - 总参数量:       {total_params:,}")
-    print(f"  - 可训练参数量:   {trainable_params:,}")
+    print("model params:")
+    print(f"  - total_params:  {total_params:,}")
+    print(f"  - trainable_params:   {trainable_params:,}")
     print("-" * 50)
 
 if __name__ == "__main__":
-    REAL_DATA_FILE = "user2item.pkl" 
-    OUTPUT_DIR = "./hstu_test_run"
+    REAL_DATA_FILE = "./data/Beauty/user2item.pkl" 
+    OUTPUT_DIR = "./hstu"
     MAX_SEQ_LEN = 20
-    EMBEDDING_DIM = 512
-    EVAL_EVERY_N_EPOCHS = 5
+    EMBEDDING_DIM = 32
+    EVAL_EVERY_N_EPOCHS = 1
     VOCAB_SIZE = load_data_and_get_vocab_size(REAL_DATA_FILE)
     
     config = HSTUConfig(
         vocab_size=VOCAB_SIZE,
-        max_sequence_len=MAX_SEQ_LEN,
-        embedding_dim=EMBEDDING_DIM,
+        max_seq_len=MAX_SEQ_LEN,
+        hidden_size=EMBEDDING_DIM,
         pad_token_id=0,
     )
     model = HSTU4HF(config)
@@ -158,23 +145,23 @@ if __name__ == "__main__":
     data_collator = HSTUDataCollator(pad_token_id=config.pad_token_id, max_seq_len=MAX_SEQ_LEN)
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        num_train_epochs=100, 
-        per_device_train_batch_size=2048,
-        per_device_eval_batch_size=512,
-        logging_strategy="steps",
-        logging_steps=20,
+        num_train_epochs=200, 
+        per_device_train_batch_size=1024,
+        per_device_eval_batch_size=256,
+        logging_strategy="epoch",
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="NDCG@10", 
         greater_is_better=True,       
         report_to="none",
-        learning_rate=5e-4, 
-        # weight_decay=0.01,
+        learning_rate=1e-3, 
+        ddp_find_unused_parameters=False,
+        weight_decay=0.01,
         # warmup_steps=500, 
     )
     callbacks = [
-        EarlyStoppingCallback(early_stopping_patience=4), 
+        EarlyStoppingCallback(early_stopping_patience=100), 
         EvaluateEveryNEpochsCallback(n_epochs=EVAL_EVERY_N_EPOCHS)
     ]
 
@@ -183,15 +170,16 @@ if __name__ == "__main__":
         args=training_args,
         callbacks = callbacks,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=test_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics
     )
     
 
     trainer.train()
 
-    print("--- 开始最终评估 ---")
+    print("--- Test Set Evaluation ---")
     test_results = trainer.evaluate(eval_dataset=test_dataset) 
     test_results_renamed = {f"test_{k}": v for k, v in test_results.items()}
-    print("评估结果:", test_results_renamed)
+    print("Result:", test_results_renamed)

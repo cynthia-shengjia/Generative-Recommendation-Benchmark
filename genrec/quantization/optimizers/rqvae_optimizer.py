@@ -17,7 +17,6 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
         # self.torch_optimizer = torch.optim.Adagrad(self.tokenizer.parameters(), lr=learning_rate)
         weight_decay = self.config.get('weight_decay', 0.1)
 
-        # 不对 bias 和 bn 应用 weight_decay
         decay_params = []
         no_decay_params = []
         for name, param in self.tokenizer.named_parameters():
@@ -53,7 +52,6 @@ class RQVAETokenizerOptimizer(AbstractTokenizerOptimizer):
     def step(self):
         self.torch_optimizer.step()
     
-        # 添加一个方法，用于将优化器状态移动到指定设备
     def move_optimizer_state_to_device(self, device):
         for state in self.torch_optimizer.state.values():
             for k, v in state.items():

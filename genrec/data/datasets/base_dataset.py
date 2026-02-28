@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 class BaseSeqRecDataset(Dataset):
-    """序列推荐数据集基类"""
     
     def __init__(
         self,
@@ -29,7 +28,6 @@ class BaseSeqRecDataset(Dataset):
         self.mode = mode
         self.device = device
         
-        # 词汇表属性
         self.vocab_size = self.tokenizer.vocab_size
         self.num_user_tokens = self.tokenizer.num_user_tokens
         self.n_codebooks = self.tokenizer.n_codebooks
@@ -40,33 +38,27 @@ class BaseSeqRecDataset(Dataset):
             self.n_codebooks * self.codebook_size + self.len_reserve_tokens
         )
         
-        # 确保配置中有必要的参数
         assert 'max_seq_len' in config, "config must contain 'max_seq_len'"
         
-        # 加载数据
         self.user_seqs = self._load_user_seqs()
         self.user_ids = list(self.user_seqs.keys())
         
-        # 计算每个物品的token数量
         self.tokens_per_item = self._get_tokens_per_item()
         if config['use_user_tokens']:
             self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
         else:
             self.max_token_len = self.tokens_per_item * self.config['max_seq_len']
         
-        # 创建样本
         self.all_items = self._get_all_items()
         self.samples = self._create_samples()
     
     def _get_all_items(self) -> List[int]:
-        """获取所有物品ID"""
         all_items = set()
         for item_seq in self.user_seqs.values():
             all_items.update(item_seq)
         return sorted(list(all_items))
     
     def _load_user_seqs(self) -> Dict[int, List[int]]:
-        """加载用户交互序列"""
         user_seqs = defaultdict(list)
         with open(self.data_interaction_files, 'rb') as f:
             user_seqs_dataframe = pickle.load(f)
@@ -77,18 +69,15 @@ class BaseSeqRecDataset(Dataset):
         return user_seqs
     
     def _get_tokens_per_item(self) -> int:
-        """获取每个物品的token数量"""
         if not self.tokenizer.item2tokens:
             return 1
         first_item = next(iter(self.tokenizer.item2tokens.keys()))
         return len(self.tokenizer.item2tokens[first_item])
     
     def _create_samples(self) -> List[Dict[str, Any]]:
-        """创建样本 - 子类需要重写此方法"""
         raise NotImplementedError("Subclasses must implement _create_samples()")
     
     def _get_item_tokens(self, item_id: int) -> List[int]:
-        """获取物品的token序列"""
         if item_id in self.tokenizer.item2tokens:
             return self.tokenizer.item2tokens[item_id]
         else:
@@ -98,5 +87,4 @@ class BaseSeqRecDataset(Dataset):
         return len(self.samples)
     
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        """获取单个样本 - 子类需要重写此方法"""
         raise NotImplementedError("Subclasses must implement __getitem__()")

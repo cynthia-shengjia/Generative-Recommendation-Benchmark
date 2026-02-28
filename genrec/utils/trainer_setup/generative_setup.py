@@ -19,31 +19,14 @@ def setup_training(
     train_dataset,
     valid_dataset,
     model_config,
-    generative_config: DictConfig,  # 新增：generative 配置
+    generative_config: DictConfig,
     output_dirs,
     logger,
     per_device_train_batch_size,
     per_device_eval_batch_size,
     train_data_collator,
 ):
-    """
-    统一的 Generative 训练设置函数
     
-    Args:
-        model: 模型
-        tokenizer: 分词器
-        train_dataset: 训练数据集
-        valid_dataset: 验证数据集
-        model_config: 模型配置
-        generative_config: Generative 配置（包含 trainer 配置）
-        output_dirs: 输出目录
-        logger: 日志记录器
-        per_device_train_batch_size: 训练批次大小
-        per_device_eval_batch_size: 评估批次大小
-        train_data_collator: 训练数据 collator
-    """
-    
-    # ===== 1. 训练参数配置 =====
     training_args = TrainingArguments(
         output_dir=output_dirs['model'],
         num_train_epochs=model_config['num_epochs'],
@@ -56,7 +39,7 @@ def setup_training(
         save_total_limit=2,
         load_best_model_at_end=True,
         logging_dir=output_dirs['logs'],
-        logging_steps=100,
+        logging_strategy="epoch",
         report_to=[],
         warmup_ratio=model_config["warmup_ratio"],
         ddp_find_unused_parameters=False,
@@ -83,25 +66,18 @@ def setup_training(
         'max_k': max_k
     }
     
-    # ===== 3. 回调函数 =====
+    # ===== CallBacks =====
     callbacks = [
         EarlyStoppingCallback(
             early_stopping_patience=model_config.get("early_stop_upper_steps", 1000)
         ),
         GenerativeLoggingCallback(logger),
-        EvaluateEveryNEpochsCallback(
-            n_epochs=model_config.get("evaluation_epoch", 5)
-        ),
-        # DelayedEvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5), start_epoch=120)
+        # start_epoch means when to start evaluate
+        DelayedEvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5), start_epoch=0)
     ]
     
-    # ===== 4. 使用 partial instantiate 创建 Trainer =====
-    # logger.info(f"实例化 Trainer: {generative_config.trainer._target_}")
-    
-    # 🔥 使用 instantiate 获取 partial 函数
     trainer_partial = instantiate(generative_config.trainer)
     
-    # 🔥 调用 partial 函数，传入运行时参数
     trainer = trainer_partial(
         model=model,
         args=training_args,
@@ -115,12 +91,5 @@ def setup_training(
         pad_token_id=tokenizer.pad_token,
         eos_token_id=tokenizer.eos_token,
     )
-    
-    # logger.info(f"Trainer 配置完成:")
-    # logger.info(f"  - Trainer 类型: {generative_config.trainer._target_}")
-    # logger.info(f"  - Num beams: {num_beams}")
-    # logger.info(f"  - Max gen length: {max_gen_length}")
-    # logger.info(f"  - Max k: {max_k}")
-    # logger.info(f"  - Metric for best model: {training_args.metric_for_best_model}")
     
     return trainer

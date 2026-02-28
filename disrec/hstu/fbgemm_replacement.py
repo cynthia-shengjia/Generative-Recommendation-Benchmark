@@ -2,16 +2,6 @@ import torch
 from typing import List, Tuple
 
 def asynchronous_complete_cumsum_py(lengths: torch.Tensor) -> torch.Tensor:
-    """
-    功能等价于 torch.ops.fbgemm.asynchronous_complete_cumsum
-    根据序列长度计算偏移量。此函数与padding方向无关，无需修改。
-    
-    Args:
-        lengths (torch.Tensor): 形如 [len_1, len_2, ...] 的一维张量。
-
-    Returns:
-        torch.Tensor: 形如 [0, len_1, len_1+len_2, ...] 的偏移量张量。
-    """
     zero = torch.tensor([0], device=lengths.device, dtype=torch.int64)
     return torch.cat([zero, torch.cumsum(lengths, dim=0, dtype=torch.int64)])
 
@@ -21,9 +11,7 @@ def jagged_to_padded_dense_py(
     max_lengths: List[int],
     padding_value: float = 0.0,
 ) -> torch.Tensor:
-    """
-    jagged_to_padded_dense 的 PyTorch 实现，支持右Padding。
-    """
+
     offset_tensor = offsets[0]
     max_length = max_lengths[0]
     batch_size = len(offset_tensor) - 1
@@ -48,9 +36,7 @@ def dense_to_jagged_py(
     dense: torch.Tensor, 
     offsets: List[torch.Tensor]
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-    """
-    dense_to_jagged 的 PyTorch 实现，用于处理右Padding的张量。
-    """
+
     offset_tensor = offsets[0]
     batch_size = len(offset_tensor) - 1
     max_length = dense.size(1)

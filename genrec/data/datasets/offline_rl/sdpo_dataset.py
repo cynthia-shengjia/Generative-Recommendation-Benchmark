@@ -3,21 +3,18 @@ import random
 from ..base_dataset import BaseSeqRecDataset
 
 class SDPODataset(BaseSeqRecDataset):
-    """SDPO (Offline RL) 数据集"""
+    """SDPO (Offline RL) """
     
     def __init__(self, neg_num, *args, **kwargs):
-        # 在初始化前设置负采样相关属性
         self.neg_num = neg_num
         super().__init__(*args, **kwargs)
 
     def _create_samples(self) -> List[Dict[str, Any]]:
-        """创建样本（带负采样）"""
         samples = []
         max_item_seq_len = self.config['max_seq_len']
         
         for user_id, item_seq in self.user_seqs.items():
             if self.mode == 'train':
-                # 训练集：截断最后两个物品
                 item_seq = item_seq[:-2]
                 for i in range(1, len(item_seq)):
                     history = item_seq[:i]
@@ -26,7 +23,6 @@ class SDPODataset(BaseSeqRecDataset):
                     if len(history) > max_item_seq_len:
                         history = history[-max_item_seq_len:]
                     
-                    # 负采样
                     user_interacted = set(item_seq[:i+1])
                     candidate_negatives = [
                         item for item in self.all_items 
@@ -45,7 +41,6 @@ class SDPODataset(BaseSeqRecDataset):
                     })
             
             elif self.mode == 'valid':
-                # 验证集
                 if len(item_seq) < 3:
                     continue
                 history = item_seq[:-2]
@@ -53,7 +48,6 @@ class SDPODataset(BaseSeqRecDataset):
                 if len(history) > max_item_seq_len:
                     history = history[-max_item_seq_len:]
                 
-                # 负采样
                 user_interacted = set(item_seq[:-1])
                 candidate_negatives = [
                     item for item in self.all_items 
@@ -72,7 +66,6 @@ class SDPODataset(BaseSeqRecDataset):
                 })
             
             elif self.mode == 'test':
-                # 测试集
                 if len(item_seq) < 2:
                     continue
                 history = item_seq[:-1]
@@ -80,7 +73,6 @@ class SDPODataset(BaseSeqRecDataset):
                 if len(history) > max_item_seq_len:
                     history = history[-max_item_seq_len:]
                 
-                # 负采样
                 user_interacted = set(item_seq)
                 candidate_negatives = [
                     item for item in self.all_items 
@@ -107,15 +99,12 @@ class SDPODataset(BaseSeqRecDataset):
         negative_items = sample['negative_items']
         user_id = sample['user_id']
         
-        # 历史物品转token
         source_tokens = []
         for item in history_items:
             source_tokens.extend(self._get_item_tokens(item))
         
-        # 目标物品转token
         target_tokens = self._get_item_tokens(target_item)
         
-        # 负样本转token
         rejected_tokens = {}
         for i, negative_item in enumerate(negative_items):
             rejected_tokens[i] = self._get_item_tokens(negative_item)

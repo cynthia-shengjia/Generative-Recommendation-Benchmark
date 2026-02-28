@@ -20,9 +20,7 @@ from disrec.hstu.similarity.mol import create_mol_interaction_module
 from disrec.hstu.similarity.dot_product import DotProductSimilarity
 @dataclass
 class HSTUOutput(ModelOutput):
-    """
-    HSTU模型的输出类
-    """
+
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     hidden_states: Optional[torch.FloatTensor] = None
@@ -30,9 +28,7 @@ class HSTUOutput(ModelOutput):
 
 
 class HSTUConfig(PretrainedConfig):
-    """
-    HSTU模型的配置类
-    """
+
     model_type = "hstu"
     
     def __init__(
@@ -110,13 +106,11 @@ class HSTU4HF(PreTrainedModel):
         super().__init__(config)
         self.config = config
         
-        # 创建嵌入模块
         self.embedding_module = LocalEmbeddingModule(
             num_items=config.vocab_size - 1,
             item_embedding_dim=config.embedding_dim,
             pad_token_id=config.pad_token_id
         )
-        # 创建相似度模块
         print(config.similarity_module)
         if config.similarity_module == "DotProduct":
             self.similarity_module = DotProductSimilarity()
@@ -128,7 +122,6 @@ class HSTU4HF(PreTrainedModel):
             )
         else:
             raise ValueError(f"Unknown similarity module: {config.similarity_module}")
-        # 创建预处理和后处理模块
         self.input_preprocessor = LearnablePositionalEmbeddingInputFeaturesPreprocessor(
             max_sequence_len=config.max_seq_len + config.max_output_len,
             embedding_dim=config.embedding_dim,
@@ -145,7 +138,6 @@ class HSTU4HF(PreTrainedModel):
                 eps=1e-6,
             )
         )
-        # 创建HSTU模型
         self.hstu = HSTU(
             max_sequence_len=config.max_seq_len,
             max_output_len=config.max_output_len,
@@ -198,20 +190,16 @@ class HSTU4HF(PreTrainedModel):
                 l2_norm=config.item_l2_norm,
                 l2_norm_eps=config.l2_norm_eps,
             )
-        # 输出投影层
         self.output_projection = nn.Linear(config.embedding_dim, config.vocab_size)
         self.output_projection.weight = self.embedding_module._item_emb.weight
-        # 初始化权重
         self.post_init()
         self._tied_weights_keys = [
-            # 第一个共享组：物品嵌入层和输出层
             "output_projection.weight",
             "embedding_module._item_emb.weight",
-            "hstu._embedding_module._item_emb.weight", # <- 关键：包含嵌套路径
+            "hstu._embedding_module._item_emb.weight",
             
-            # 第二个共享组：位置嵌入层
             "input_preprocessor._pos_emb.weight",
-            "hstu._input_features_preproc._pos_emb.weight" # <- 关键：包含嵌套路径
+            "hstu._input_features_preproc._pos_emb.weight" 
         ]
     def get_input_embeddings(self):
         return self.embedding_module._item_emb
@@ -219,23 +207,8 @@ class HSTU4HF(PreTrainedModel):
         self.embedding_module._item_emb = value
     
     def get_output_embeddings(self):
-        """获取输出线性投影层，用于权重绑定检查"""
         return self.output_projection
 
-    # def _tie_weights(self):
-    #     """
-    #     检查输入/输出权重是否绑定，并相应地更新模型配置。
-    #     `PreTrainedModel` 的 `save_pretrained` 方法会自动调用此函数。
-    #     """
-    #     output_embeddings = self.get_output_embeddings()
-    #     input_embeddings = self.get_input_embeddings()
-
-    #     if output_embeddings is not None and input_embeddings is not None:
-    #         # 使用 `is` 检查它们是否是内存中的同一个对象
-    #         if output_embeddings.weight is input_embeddings.weight:
-    #             # 如果是，更新配置中的 tie_word_embeddings 标志
-    #             self.config.tie_word_embeddings = True
-    
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -245,20 +218,11 @@ class HSTU4HF(PreTrainedModel):
         past_lengths: Optional[torch.LongTensor] = None,
         **kwargs
     ) -> Union[HSTUOutput, Tuple]:
-        """
-        
-        Args:
-            input_ids: (batch_size, sequence_length) 输入序列
-            attention_mask: (batch_size, sequence_length) 注意力掩码
-            labels: (batch_size,) 或 (batch_size, sequence_length) 标签
-            timestamps: (batch_size, sequence_length) 时间戳信息
-            past_lengths: (batch_size,) 序列有效长度
-            return_sequence_embeddings: 是否返回完整序列嵌入
-        """
+
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         
-        # 计算有效长度 - 优先使用传入的past_lengths
+
         if past_lengths is not None:
             computed_lengths = past_lengths
         elif attention_mask is not None:
@@ -266,10 +230,10 @@ class HSTU4HF(PreTrainedModel):
         else:
             computed_lengths = torch.full((batch_size,), seq_len, dtype=torch.long, device=device)
         
-        # 获取嵌入
+
         input_embeddings = self.embedding_module.get_item_embeddings(input_ids)
         
-        # 准备payload
+
         past_payloads = {}
         if timestamps is not None:
             past_payloads["timestamps"] = timestamps
@@ -279,7 +243,7 @@ class HSTU4HF(PreTrainedModel):
             past_ids=input_ids,
             past_embeddings=input_embeddings,
             past_payloads=past_payloads,
-        )  # [B, N, D] - 完整序列嵌入
+        ) 
         supervision_ids = input_ids
         if self.sampling_strategy == "in-batch":
             # get_item_embeddings currently assume 1-d tensor.
@@ -298,18 +262,15 @@ class HSTU4HF(PreTrainedModel):
         if not self.training:
             last_item_indices = computed_lengths - 1 # [B]
             
-            # 将索引调整为正确的形状以便gather
             # last_item_indices.view(-1, 1, 1) -> [B, 1, 1]
             # .expand(-1, -1, self.config.embedding_dim) -> [B, 1, D]
             last_hidden_state = sequence_embeddings.gather(
                 1, 
                 last_item_indices.view(-1, 1, 1).expand(-1, -1, self.config.embedding_dim)
-            ).squeeze(1) # 最后形状为 [B, D]
+            ).squeeze(1) # [B, D]
 
-            # 2. 获取完整的 item embedding 矩阵
             all_item_embeddings = self.get_input_embeddings().weight # 形状: [V, D]
 
-            # 3. 计算点积，得到 logits
             # [B, D] @ [D, V] -> [B, V]
             logits = torch.matmul(last_hidden_state, all_item_embeddings.t())
         loss = None

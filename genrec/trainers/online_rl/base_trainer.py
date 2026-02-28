@@ -54,7 +54,6 @@ class BaseOnlineRLTrainer(Trainer, ABC):
         eos_token_id: Optional[int] = None,
         optimizers: Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
     ):
-        # ... (same as before)
         
         # ===== Tokenizer and Trie =====
         self.item2tokens = item2tokens

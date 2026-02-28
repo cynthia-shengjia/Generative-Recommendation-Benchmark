@@ -4,10 +4,10 @@ defaults:
   - _self_
   - model: t5
   - tokenizer: rqvae
-  - generative: tiger  # 🔥 新增：指定使用的 trainer
+  - generative: tiger 
 
 dataset: "Beauty"
-output_dir: "/home/zhenxiangxv/GR-Benchmark/pushVersion/Generative-Recommendation-Benchmark/Beauty"
+output_dir: "./Beauty"
 cuda: "0"
 force_retrain_tokenizer: false
 force_retrain_model: false

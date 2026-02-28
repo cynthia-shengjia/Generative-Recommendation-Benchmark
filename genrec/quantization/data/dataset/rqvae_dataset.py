@@ -137,7 +137,6 @@ class ItemEmbeddingDataset(Dataset):
                         return default
                     return str(value).strip()
                 
-                # 获取各个字段
                 title = safe_get_field('Title', 'Unknown')
                 categories = safe_get_field('Categories', 'Unknown')
                 brand = safe_get_field('Brand', 'Unknown')
@@ -148,7 +147,6 @@ class ItemEmbeddingDataset(Dataset):
                 
                 basic_info_parts.append(f"Atomic Item ID: {item_id}")
                 
-                # 只有非Unknown的字段才添加
                 if title != 'Unknown':
                     basic_info_parts.append(f"Title: {title}")
                 
@@ -172,34 +170,6 @@ class ItemEmbeddingDataset(Dataset):
         
         print(f"Successfully loaded {len(item_reviews)} items")
         return item_reviews
-
-
-
-    # def _load_item_reviews(self) -> Dict[int, Tuple[str, str]]:
-    #     """
-    #     Load item reviews from the text data file, splitting into basic info and description.
-        
-    #     Args:
-    #         None
-            
-    #     Returns:
-    #         Dictionary mapping item IDs to tuple of (basic_info, description)
-    #     """
-    #     item_reviews = defaultdict(lambda: ("", ""))
-        
-    #     with open(self.data_text_files, 'rb') as f:
-    #         item_titles_dataframe = pickle.load(f)
-        
-    #     for _, row in item_titles_dataframe.iterrows():
-    #         item_id = int(row['ItemID'])
-    #         # 基本信息部分（不包含描述）
-    #         basic_info = f"Atomic Item ID: {row['ItemID']}, Title: {row['Title']}, Categories: {row['Categories']}, Brand: {row['Brand']}"
-    #         # 描述部分
-    #         description = str(row['Description']) if row['Description'] else ""
-            
-    #         item_reviews[item_id] = (basic_info, description)
-        
-    #     return item_reviews
     
     def _extract_embeddings(
         self, 
@@ -270,7 +240,6 @@ class ItemEmbeddingDataset(Dataset):
         batch_size = 32  # Adjust based on GPU memory
         item_ids = list(self.item_reviews.keys())
         
-        # 分别提取基本信息和描述
         basic_infos = [self.item_reviews[item_id][0] for item_id in item_ids]
         descriptions = [self.item_reviews[item_id][1] for item_id in item_ids]
         
@@ -278,11 +247,9 @@ class ItemEmbeddingDataset(Dataset):
         basic_embeddings = self._process_text_batch(basic_infos, item_ids, batch_size)
         
         # print("Processing description embeddings...")
-        # # 只处理非空描述
         
         # desc_embeddings = self._process_text_batch(descriptions, item_ids, batch_size)
         desc_embeddings = None
-        # 合并嵌入
         for item_id in item_ids:
             basic_emb = basic_embeddings.get(item_id)
             # desc_emb = desc_embeddings.get(item_id)
@@ -302,69 +269,13 @@ class ItemEmbeddingDataset(Dataset):
         
         return item_embeddings
 
-    # def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
-    #     """
-    #     Process a batch of texts and return embeddings.
-    #     Only processes non-empty texts and returns None for empty texts.
-        
-    #     Args:
-    #         texts: List of texts to process
-    #         item_ids: Corresponding item IDs
-    #         batch_size: Batch size for processing
-            
-    #     Returns:
-    #         Dictionary mapping item IDs to embeddings (only for non-empty texts)
-    #     """
-    #     embeddings_dict = {}
-        
-    #     # 预先过滤空文本，保留原始索引
-    #     valid_pairs = []
-    #     for i, (text, item_id) in enumerate(zip(texts, item_ids)):
-    #         if text and text.strip():  # 只处理非空文本
-    #             valid_pairs.append((text, item_id))
-        
-    #     if not valid_pairs:
-    #         print("Warning: No valid texts to process")
-    #         return embeddings_dict  # 返回空字典
-        
-    #     valid_texts, valid_ids = zip(*valid_pairs)
-    #     valid_texts = list(valid_texts)
-    #     valid_ids = list(valid_ids)
-        
-    #     print(f"Processing {len(valid_texts)} valid texts out of {len(texts)} total texts...")
-        
-    #     for i in range(0, len(valid_texts), batch_size):
-    #         batch_texts = valid_texts[i:i+batch_size]
-    #         batch_ids = valid_ids[i:i+batch_size]
-            
-    #         # Tokenize the batch
-    #         inputs = self.text_tokenizer(
-    #             batch_texts, 
-    #             return_tensors="pt", 
-    #             padding=True, 
-    #             truncation=True, 
-    #             max_length=self.max_seq_length
-    #         ).to(self.device)
-            
-    #         # Get model outputs
-    #         with torch.no_grad():
-    #             outputs = self.text_model(**inputs)
-            
-    #         # Extract embeddings based on the selected strategy
-    #         embeddings = self._extract_embeddings(outputs, inputs.attention_mask)
-            
-    #         # Store embeddings (只存储有效文本的embedding)
-    #         for j, item_id in enumerate(batch_ids):
-    #             embeddings_dict[item_id] = embeddings[j].cpu().numpy()
-        
-    #     return embeddings_dict
+
     def _process_text_batch(self, texts: List[str], item_ids: List[int], batch_size: int) -> Dict[int, np.ndarray]:
         valid_pairs = [(t, i) for t, i in zip(texts, item_ids) if t and t.strip()]
         if not valid_pairs: return {}
         
         valid_texts, valid_ids = zip(*valid_pairs)
         
-        # 直接调用 encode，它会自动处理 batching 和 pooling
         embeddings = self.text_model.encode(
             list(valid_texts),
             batch_size=batch_size,
@@ -386,34 +297,6 @@ class ItemEmbeddingDataset(Dataset):
         """
         return len(self.item_ids)
     
-    # def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor, str]]:
-    #     """
-    #     Get a single item from the dataset.
-        
-    #     Args:
-    #         index: Index of the item to retrieve
-            
-    #     Returns:
-    #         Dictionary containing:
-    #             - item_id: ID of the item
-    #             - embedding: Tensor of the item's embedding
-    #             - text: Original text of the item
-    #     """
-    #     # Get item ID
-    #     item_id = self.item_ids[index]
-        
-    #     # Get item embedding and text
-    #     embedding = self.item_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
-    #     text = self.item_reviews.get(item_id, "")
-        
-    #     # Convert to tensor
-    #     embedding_tensor = torch.tensor(embedding, dtype=torch.float32)
-        
-    #     return {
-    #         "item_id": item_id,
-    #         "embedding": embedding_tensor,
-    #         "text": text
-    #     }
     def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor, str]]:
         """
         Get a single item from the dataset.
@@ -504,7 +387,6 @@ def item_collate_fn(batch: List[Dict[str, Union[int, torch.Tensor, str]]]) -> Di
     }
 
 
-# Example usage
 def create_item_dataloader(
     data_text_files: str,
     config: Any,

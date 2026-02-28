@@ -1,5 +1,5 @@
 from transformers import T5ForConditionalGeneration,T5Config
-from genrec.models.LETTER.LETTERT5 import LETTERT5ForConditionalGeneration
+from genrec.models.LETTER.LETTER import LETTERT5ForConditionalGeneration
 
 def create_letter_model(vocab_size: int, model_config: dict) -> T5ForConditionalGeneration:
     config = T5Config(

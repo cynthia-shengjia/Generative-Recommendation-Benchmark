@@ -10,9 +10,7 @@ from disrec.sasrec.sasrec import SASRecModel
 
 @dataclass
 class SASRecOutput(ModelOutput):
-    """
-    SASRec模型的输出类
-    """
+
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     hidden_states: Optional[torch.FloatTensor] = None
@@ -49,6 +47,7 @@ class SASRecConfig(PretrainedConfig):
         self.norm_emb = norm_emb
         self.dropout_rate = hidden_dropout_prob
         self.num_neg_samples = num_neg_samples 
+        self.loss_type = "BCE"
 
 
 class SASRec4HF(PreTrainedModel):
@@ -58,13 +57,9 @@ class SASRec4HF(PreTrainedModel):
     def __init__(self, config: SASRecConfig):
         super().__init__(config)
         self.config = config
-
-        # 创建SASRec模型
         self.SASRec = SASRecModel(config)
-        # 修改为二元交叉熵损失函数
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.ce_loss_fn = nn.CrossEntropyLoss()
-        # 初始化权重
         self.post_init()
 
     def get_input_embeddings(self):
@@ -83,12 +78,7 @@ class SASRec4HF(PreTrainedModel):
         labels: Optional[torch.LongTensor] = None,
         **kwargs
     ) -> Union[SASRecOutput, Tuple]:
-        """
-        Args:
-            input_ids: (batch_size, sequence_length) 输入序列
-            attention_mask: (batch_size, sequence_length) 注意力掩码
-            labels: (batch_size,) 或 (batch_size, sequence_length) 标签
-        """
+
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         
@@ -108,7 +98,7 @@ class SASRec4HF(PreTrainedModel):
                 1, 
                 last_item_indices.view(-1, 1, 1).expand(-1, -1, self.config.hidden_size)
             ).squeeze(1)  # -> [B, D]
-            # 计算 logits: [B, D] @ [D, V] -> [B, V]
+            #logits: [B, D] @ [D, V] -> [B, V]
             logits = torch.matmul(last_hidden_state, item_embeddings.t())
             last_labels = labels.gather(1, last_item_indices.view(-1, 1)).squeeze(-1)
             loss = self.ce_loss_fn(logits, last_labels)
@@ -117,21 +107,17 @@ class SASRec4HF(PreTrainedModel):
                 logits = logits / self.config.temperature
                 
         else:
-            # [B, N, D] @ [D, V] -> [B, N, V]
-            # last_hidden_state = sequence_hidden_states[:, -1, :]
-            # logits = torch.matmul(last_hidden_state, item_embeddings.t())
-            # if self.SASRec.config.norm_emb:
-            #     logits = logits / self.config.temperature
-            # loss = self.ce_loss_fn(logits, labels[:, -1])
-
-            # 只计算最后一位的BCE
-            last_hidden_state = sequence_hidden_states[:, -1:, :] # [B, 1, D]
-            last_labels = labels[:, -1:] # [B, 1]
-            loss = self.compute_loss(last_hidden_state, last_labels, input_ids, item_embeddings)
-            logits = None
-            # 全部计算的BCE
-            # loss = self.compute_loss(sequence_hidden_states, labels, input_ids, item_embeddings)
-            # logits = None
+            if self.config.loss_type = "BCE":
+                last_hidden_state = sequence_hidden_states[:, -1:, :] # [B, 1, D]
+                last_labels = labels[:, -1:] # [B, 1]
+                loss = self.compute_loss(last_hidden_state, last_labels, input_ids, item_embeddings)
+                logits = None
+            elif self.config.loss_type = "softmax":
+                last_hidden_state = sequence_hidden_states[:, -1, :]
+                logits = torch.matmul(last_hidden_state, item_embeddings.t())
+                if self.SASRec.config.norm_emb:
+                    logits = logits / self.config.temperature
+                loss = self.ce_loss_fn(logits, labels[:, -1])
 
         return SASRecOutput(
             loss=loss,
@@ -152,16 +138,13 @@ class SASRec4HF(PreTrainedModel):
 
         probs = torch.ones(batch_size, v_size, device=device)
         
-        # 1. 构造排除列表
         forbidden_items = torch.cat([input_ids, labels], dim=-1) 
 
         clean_forbidden_items = forbidden_items.clone()
         clean_forbidden_items[clean_forbidden_items < 0] = self.config.pad_idx
         
-        # 再次检查上限，防止越界
         if clean_forbidden_items.max() >= v_size:
-            raise ValueError(f"检测到 ID {clean_forbidden_items.max()} 超过 vocab_size {v_size}")
-        # ------------------------------------
+            raise ValueError(f"ID {clean_forbidden_items.max()} is larger than vocab_size {v_size}")
 
         probs.scatter_(1, clean_forbidden_items, 0.0) 
         probs[:, self.config.pad_idx] = 0.0

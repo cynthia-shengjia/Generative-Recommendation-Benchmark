@@ -2,7 +2,6 @@ from datetime import datetime
 import logging 
 import os
 import json
-# 读取JSON文件
 
   
 def setup_logging(log_dir: str):

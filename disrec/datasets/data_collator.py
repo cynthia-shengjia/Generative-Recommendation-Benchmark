@@ -28,16 +28,15 @@ class HSTUDataCollator:
             labels = label_sequences[i]
             ts = ts_sequences_input[i]
             
-            # 断言确保输入和标签长度一致
             assert len(ids) == len(labels) == len(ts)
 
             padding_length = max_length - len(ids)
             
-            # Padding `input_ids` 和 `timestamps` (右padding)
+            # Padding `input_ids` and `timestamps` (right padding)
             padded_ids = ids + [self.pad_token_id] * padding_length
             padded_ts = ts + [self.pad_timestamp_value] * padding_length
             
-            # 创建 attention_mask
+            # attention_mask
             mask = [1] * len(ids) + [0] * padding_length
             
             # Padding `labels`
@@ -48,7 +47,6 @@ class HSTUDataCollator:
             attention_masks.append(mask)
             padded_timestamps.append(padded_ts)
 
-        # 3. 转换为 PyTorch Tensors
         batch = {
             "input_ids": torch.tensor(padded_input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
@@ -82,8 +80,8 @@ class SASRecDataCollator:
             
 
             padding_length = max_length - len(ids)
-            #TODO：SASRec是左padding
-            # Padding `input_ids` 和 `timestamps` (右padding)
+            #left padding
+            # Padding `input_ids` and `timestamps` (left padding)
             padded_ids = [self.pad_token_id] * padding_length + ids
             
             mask =  [0] * padding_length + [1] * len(ids)
@@ -95,7 +93,6 @@ class SASRecDataCollator:
             padded_labels.append(padded_label)
             attention_masks.append(mask)
 
-        # 3. 转换为 PyTorch Tensors
         batch = {
             "input_ids": torch.tensor(padded_input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
