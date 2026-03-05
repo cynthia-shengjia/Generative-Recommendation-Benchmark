@@ -89,10 +89,10 @@ class LETTERResidualVectorQuantizer(ResidualVectorQuantizer):
             all_losses.append(loss)
             all_indices.append(indices)
 
-        mean_losses = torch.stack(all_losses).mean()
+        total_losses = torch.stack(all_losses).sum()
         all_indices = torch.stack(all_indices, dim=-1)
 
-        return x_q, mean_losses, all_indices
+        return x_q, total_losses, all_indices
 class LETTERVectorQuantizer(VectorQuantizer):
     def __init__(self, n_e, e_dim, mu=0.25, diversity_beta=1,
                  kmeans_init=False, kmeans_iters=10):
@@ -120,37 +120,27 @@ class LETTERVectorQuantizer(VectorQuantizer):
         return t_centers, t_labels
 
     def diversity_loss(self, x_q, indices, labels):
-        # 1. 确保 labels 是 Tensor 且在正确的设备上
         if not isinstance(labels, torch.Tensor):
             labels_tensor = torch.tensor(labels, device=x_q.device)
         else:
             labels_tensor = labels.to(x_q.device)
 
-        # 2. 获取当前 batch 样本所属的 cluster
         current_cluster_ids = labels_tensor[indices] # [B]
 
-        # 3. 构造同类掩码 (Batch_Size, Num_Embeddings)
-        # 标记出哪些 embedding 属于同一类
         mask = (current_cluster_ids.unsqueeze(1) == labels_tensor.unsqueeze(0)) 
         
-        # 4. 排除自身索引
         self_mask = torch.zeros_like(mask)
         self_mask.scatter_(1, indices.unsqueeze(1), True)
         mask = mask & ~self_mask
 
-        # 5. 随机采样正样本索引 (在 GPU 上并行)
-        # 增加极小值防止全 0 行报错
         weights = mask.float() + 1e-12
         pos_sample_indices = torch.multinomial(weights, 1).squeeze(1)
 
-        # 6. 计算相似度
         emb = self.embedding.weight
         sim = torch.matmul(x_q, emb.t()) # [B, N_E]
 
-        # 7. 屏蔽掉自身的得分 (减去大值)
         sim.scatter_(1, indices.unsqueeze(1), -1e9)
 
-        # 8. Cross Entropy
         loss = F.cross_entropy(sim, pos_sample_indices)
         return loss
 
