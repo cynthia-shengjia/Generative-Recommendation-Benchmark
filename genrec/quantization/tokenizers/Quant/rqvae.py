@@ -181,10 +181,10 @@ class ResidualVectorQuantizer(nn.Module):
             all_losses.append(loss)
             all_indices.append(indices)
 
-        total_losses = torch.stack(all_losses).sum()
+        mean_losses = torch.stack(all_losses).mean()
         all_indices = torch.stack(all_indices, dim=-1)
 
-        return x_q, total_losses, all_indices
+        return x_q, mean_losses, all_indices
 
 class VectorQuantizer(nn.Module):
     def __init__(self, n_e, e_dim, mu=0.25,
