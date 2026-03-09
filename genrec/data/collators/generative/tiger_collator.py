@@ -6,7 +6,6 @@ from ..base_collator import BaseSeqRecDataCollator
   
 @dataclass  
 class TigerDataCollator(BaseSeqRecDataCollator):  
-    """Tiger 生成式推荐 DataCollator"""  
     max_seq_len: int  
     pad_token_id: int  
     eos_token_id: int  

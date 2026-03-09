@@ -6,7 +6,7 @@ from genrec.utils.models_setup.letter_setup import create_letter_model
 from genrec.data.datasets.generative.tiger_dataset import TigerDataset
 from genrec.data.collators.generative.tiger_collator import TigerDataCollator
 
-from genrec.quantization.pipelines.rqvae_pipeline import RQVAETrainingPipeline              # 🔥 新增
+from genrec.quantization.pipelines.rqvae_pipeline import RQVAETrainingPipeline      
 from genrec.quantization.pipelines.rqvae_pipeline_letter import LETTERRQVAETrainingPipeline
 
 MODEL_FACTORY = {

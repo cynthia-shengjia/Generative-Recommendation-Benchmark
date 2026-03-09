@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Union
 from ..base_dataset import BaseSeqRecDataset
 
-class SeqDataset(BaseSeqRecDataset):
+class TigerDataset(BaseSeqRecDataset):
     
     def _create_samples(self) -> List[Dict[str, Any]]:
         samples = []
