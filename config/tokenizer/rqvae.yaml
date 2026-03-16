@@ -9,7 +9,7 @@ rq_e_dim: 32
 rq_layers: [512, 256, 128]
 dropout_prob: 0
 loss_type: "mse"
-quant_loss_weight: 1.0
+quant_loss_weight: 0.25
 commitment_beta: 0.25
 rq_kmeans_init: true
 kmeans_iters: 10
@@ -19,7 +19,7 @@ batch_size: 1024
 log_interval: 10
 save_interval: 2000
 embedding_strategy: "mean_pooling"
-final_model_decision: "save_final"
+final_model_decision: "save_best"
 cf_emb_path: "sasrec_cf_embedding.pt"
 diversity_beta: 1e-4
 cf_alpha: 0.02

@@ -281,7 +281,7 @@ class ItemEmbeddingDataset(Dataset):
             batch_size=batch_size,
             show_progress_bar=True,
             convert_to_numpy=True,
-            normalize_embeddings=True
+            normalize_embeddings=False
         )
         
         return {item_id: emb for item_id, emb in zip(valid_ids, embeddings)}
