@@ -102,12 +102,6 @@ def stage2_train_generation_model(
             logger.info(f"Error: Not Found: {tokenizer_items2tokens_path}")
         return False
     
-    tokenizer_object_path = rqvae_config['tokenizer_path']
-    if not os.path.exists(tokenizer_object_path):
-        if accelerator.is_main_process:
-            logger.info(f"Error: Not Found: {tokenizer_object_path}")
-        return False
-    
     if accelerator.is_main_process:
             logger.info("-" * 40)
             logger.info("🚀 parameters:")
@@ -119,8 +113,8 @@ def stage2_train_generation_model(
             logger.info(f"   - Inference:     {model_config.get('inference_mode')}")
             logger.info("-" * 40)
     if accelerator.is_main_process:
-        logger.info(f"loading from {tokenizer_object_path}...")
-    tokenizer = RQVAETokenizer.load(tokenizer_object_path)
+        logger.info(f"loading Tokenizer...")
+    tokenizer = RQVAETokenizer.load(rqvae_config)
     if accelerator.is_main_process:
         logger.info(f"total {len(tokenizer.item2tokens)} item")
         logger.info(f"Tokenizer vocab_size: {tokenizer.vocab_size}")
