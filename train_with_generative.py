@@ -44,7 +44,7 @@ def setup_output_directories(base_output_dir: str = "./output"):
     
     return dirs
 
-def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain: bool = False):
+def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, gen_type: str,force_retrain: bool = False, accelerator=None):
     print("\n" + "="*60)
     print("RQ-VAE Tokenizer")
     print("="*60)
@@ -64,7 +64,8 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, force_retrain:
             return False
     
     try:
-        pipeline = RQVAETrainingPipeline(rqvae_config)
+        PipelineClass = get_pipeline_class(gen_type)
+        pipeline = PipelineClass(rqvae_config, accelerator=accelerator)
         pipeline.run()
         return True
     except Exception as e:
@@ -301,14 +302,14 @@ def main(cfg: DictConfig):
     rqvae_config['checkpoint_path'] = os.path.join(output_dirs['tokenizer'], 'tokenizer_checkpoint.pth')
     
     if not cfg.skip_tokenizer:
-        if accelerator.is_main_process:
-            tokenizer_success = stage1_train_tokenizer(
-                rqvae_config, output_dirs, force_retrain=cfg.force_retrain_tokenizer
-            )
-            if not tokenizer_success:
+        tokenizer_success = stage1_train_tokenizer(
+            rqvae_config, output_dirs, gen_type=gen_type ,force_retrain=cfg.force_retrain_tokenizer, accelerator=accelerator
+        )
+        if not tokenizer_success:
+            if accelerator.is_main_process:
                 logger.info("Tokenizer train error")
-                return
-            success = success and tokenizer_success
+            return
+        success = success and tokenizer_success
         accelerator.wait_for_everyone()
     elif accelerator.is_main_process:
         logger.info("skip tokenizer training")
