@@ -70,7 +70,7 @@ class LETTERRQVAETrainingPipeline:
             per_device_batch_size = global_batch_size
         if self.accelerator is not None:
             with self.accelerator.main_process_first():
-                dataset, dataloader = create_item_dataloader(
+                dataset, train_dataloader, valid_dataloader = create_item_dataloader(
                     data_text_files=self.config['data_text_files'],
                     config=self.config,
                     batch_size=per_device_batch_size,
@@ -78,16 +78,16 @@ class LETTERRQVAETrainingPipeline:
                     embedding_strategy=self.config.get("embedding_strategy", "mean_pooling"),
                 )
         else:
-            dataset, dataloader = create_item_dataloader(
+            dataset, train_dataloader, valid_dataloader = create_item_dataloader(
                 data_text_files=self.config['data_text_files'],
                 config=self.config,
                 batch_size=per_device_batch_size,
                 text_encoder_model=self.config["text_encoder_model"],
                 embedding_strategy=self.config.get("embedding_strategy", "mean_pooling"),
-                num_workers=self.config.get("num_workers", 4)
             )
         self.dataset = dataset
-        self.train_dataloader = DataloaderWrapper(dataloader)
+        self.train_dataloader = DataloaderWrapper(train_dataloader)
+        self.valid_dataloader = DataloaderWrapper(valid_dataloader)
         print("Dataset and Dataloader created successfully.")
 
         print("\n--- Running a definitive data check ---")
@@ -108,7 +108,7 @@ class LETTERRQVAETrainingPipeline:
         self.optimizer = LETTERRQVAETokenizerOptimizer(self.config, self.tokenizer)
         self.trainer = LETTERRQVAETrainer(self.config, self.tokenizer, self.optimizer, accelerator=self.accelerator)
         print("Initialization complete.")
-        
+
     def _initialize_codebooks(self):
         """Initializes the RQ-VAE codebooks using K-Means (Main Process Only)."""
         if self.accelerator is None or self.accelerator.is_main_process:
@@ -124,7 +124,7 @@ class LETTERRQVAETrainingPipeline:
     def _train(self):
         """Executes the training loop."""
         print("\n--- Starting Tokenizer Training ---")
-        self.trainer.fit(self.train_dataloader)
+        self.trainer.fit(self.train_dataloader,self.valid_dataloader)
         print("Training finished.")
 
     def _finalize_and_verify(self):

@@ -352,7 +352,6 @@ def create_item_dataloader(
     batch_size: int = 32,
     text_encoder_model: str = "t5-small",
     embedding_strategy: str = "mean_pooling",
-    num_workers: int = 4
 ) -> Tuple[ItemEmbeddingDataset, DataLoader]:
     """
     Create a DataLoader for the item embedding dataset.
@@ -376,11 +375,16 @@ def create_item_dataloader(
         embedding_extraction_strategy=embedding_strategy
     )
     
-    dataloader = DataLoader(
+    train_dataloader = DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=True, 
         collate_fn=item_collate_fn,
     )
-    
-    return dataset, dataloader
+    valid_dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        collate_fn=item_collate_fn,
+    )
+    return dataset, train_dataloader, valid_dataloader

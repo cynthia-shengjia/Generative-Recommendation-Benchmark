@@ -145,7 +145,7 @@ class RQVAETrainer:
             logging.info(f"Checkpoint saved to {checkpoint_filename}")
             return checkpoint_filename
 
-    def fit(self, train_dataloader):
+    def fit(self, train_dataloader,valid_dataloader):
         logging.info("Start Training Tokenizer...")
         is_main = self.accelerator is None or self.accelerator.is_main_process
         if is_main:
@@ -153,10 +153,11 @@ class RQVAETrainer:
         if self.accelerator is not None:
             actual_optimizer = self.optimizer.optimizer if hasattr(self.optimizer, 'optimizer') else self.optimizer
             
-            self.tokenizer, actual_optimizer, prepared_dl = self.accelerator.prepare(
-                self.tokenizer, actual_optimizer, train_dataloader.dl
+            self.tokenizer, actual_optimizer, prepared_train_dl, prepared_valid_dl = self.accelerator.prepare(
+                self.tokenizer, actual_optimizer, train_dataloader.dl, valid_dataloader.dl
             )
-            train_dataloader.dl = prepared_dl
+            train_dataloader.dl = prepared_train_dl
+            valid_dataloader.dl = prepared_valid_dl
             
             if hasattr(self.optimizer, 'optimizer'):
                 self.optimizer.optimizer = actual_optimizer
@@ -171,14 +172,14 @@ class RQVAETrainer:
             if (epoch + 1) % 1000 == 0:
                 if is_main:
                     logging.info(f"\n=== Metrics Analysis at Epoch {epoch+1} ===")
-                self._calculate_codebook_utilization(train_dataloader, log_output=True)
-                self._calculate_collision_rate(train_dataloader, log_output=True)
+                self._calculate_codebook_utilization(valid_dataloader, log_output=True)
+                self._calculate_collision_rate(valid_dataloader, log_output=True)
                 if is_main:
                     logging.info("=" * 60)
 
             if (epoch + 1) % self.save_interval == 0:
-                _, avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=False)
-                collision_rate = self._calculate_collision_rate(train_dataloader, log_output=False)
+                _, avg_utilization = self._calculate_codebook_utilization(valid_dataloader, log_output=False)
+                collision_rate = self._calculate_collision_rate(valid_dataloader, log_output=False)
                 
                 if self.save_best_on == 'utilization':
                     comparable_metric = avg_utilization
@@ -197,8 +198,8 @@ class RQVAETrainer:
                 self._save_checkpoint(epoch, utilization_rate=avg_utilization, collision_rate=collision_rate) 
         if is_main:                
             logging.info("\n=== Final Metrics Analysis ===")
-        _, final_avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=True)
-        final_collision_rate = self._calculate_collision_rate(train_dataloader, log_output=True)
+        _, final_avg_utilization = self._calculate_codebook_utilization(valid_dataloader, log_output=True)
+        final_collision_rate = self._calculate_collision_rate(valid_dataloader, log_output=True)
         if is_main:
             logging.info("=" * 60)
         
