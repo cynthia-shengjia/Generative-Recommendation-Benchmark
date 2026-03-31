@@ -25,6 +25,7 @@ def setup_training(
     per_device_train_batch_size,
     per_device_eval_batch_size,
     train_data_collator,
+    vocab_size: Optional[int] = None
 ):
     
     training_args = TrainingArguments(
@@ -48,7 +49,6 @@ def setup_training(
         greater_is_better=True,
     )
     
-    # ===== 2. 生成评估参数 =====
     tokens_to_item_map = tokenizer.tokens2item
     compute_metrics_with_map = partial(
         compute_metrics,
@@ -90,6 +90,8 @@ def setup_training(
         item2tokens=tokenizer.item2tokens,
         pad_token_id=tokenizer.pad_token,
         eos_token_id=tokenizer.eos_token,
+        vocab_size=vocab_size,
+        inference_mode=model_config["inference_mode"]
     )
     
     return trainer

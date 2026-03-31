@@ -114,7 +114,8 @@ def stage2_train_generation_model(
             logger.info(f"   - Weight Decay:  {model_config.get('weight_decay')}")
             logger.info(f"   - Batch Size:    {model_config.get('batch_size')}")
             logger.info(f"   - Num Epochs:    {model_config.get('num_epochs')}")
-            logger.info(f"   - Seed:          {model_config.get('seed', 'N/A')}")
+            logger.info(f"   - Seed:          {model_config.get('seed')}")
+            logger.info(f"   - Inference:     {model_config.get('inference_mode')}")
             logger.info("-" * 40)
     if accelerator.is_main_process:
         logger.info(f"loading from {tokenizer_object_path}...")
@@ -230,8 +231,9 @@ def stage2_train_generation_model(
         per_device_train_batch_size=per_device_train_batch_size,
         per_device_eval_batch_size=per_device_eval_batch_size,
         train_data_collator=train_data_collator,
+        vocab_size=vocab_size
     )
-    
+    model.config.use_cache = False
     trainer.train()
     accelerator.wait_for_everyone()
     
@@ -318,7 +320,7 @@ def main(cfg: DictConfig):
         model_config['dataset_name'] = cfg.dataset
         model_config['model_save_path'] = os.path.join(output_dirs['model'], f"{cfg.dataset}_final_model.pt")
         model_config['checkpoint_dir'] = output_dirs['checkpoints']
-        
+        model_config['seed'] = seed
 
         model_success = stage2_train_generation_model(
             model_config,

@@ -4,7 +4,7 @@ data_text_files: "./data/Beauty/item2title.pkl"
 max_seq_len: 20
 padding_side: "left"
 ignored_label: -100
-vocab_size: 1024  # 256 * 4
+vocab_size: 1024
 d_kv: 64
 d_ff: 1024
 d_model: 128
@@ -21,10 +21,11 @@ num_steps: null
 k_list: [1,5,10]
 use_generative: true
 num_beams: 10
+inference_mode: "FastCBS"
 max_gen_length: 5
 weight_decay: 0.2
 warmup_ratio: 0.05
 early_stop_upper_steps: 5
 evaluation_epoch: 1
 use_user_tokens: false
-tau: 0.7
+tau: 1.0

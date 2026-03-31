@@ -26,6 +26,8 @@ class BaseGenerativeTrainer(Trainer):
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,
         optimizers=(None, None),
+        vocab_size: Optional[int] = None,
+        inference_mode: Optional[str] = None
     ):
         """
         Initialize Base Generative Trainer.
@@ -59,7 +61,8 @@ class BaseGenerativeTrainer(Trainer):
         self.item2tokens = item2tokens
         self.pad_token_id = pad_token_id
         self.eos_token_id = eos_token_id
-    
+        self.vocab_size = vocab_size
+        self.inference_mode = inference_mode
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -121,23 +124,27 @@ class BaseGenerativeTrainer(Trainer):
             "pad_token_id": self.pad_token_id,
             "eos_token_id": self.eos_token_id,
         }
-        
         # Add prefix constraint if available
-        if self.prefix_allowed_fn:
+        if self.inference_mode == "CBS":
             gen_kwargs["prefix_allowed_tokens_fn"] = self.prefix_allowed_fn
-        
         # Unwrap model for generation
         if hasattr(self, 'accelerator'):
             unwrapped_model = self.accelerator.unwrap_model(model)
         else:
             unwrapped_model = model
-        
-        generated_sequences = unwrapped_model.generate(
-            input_ids=encoder_input_ids,
-            attention_mask=encoder_attention_mask,
-            **gen_kwargs,
-        )
-        
+        if self.inference_mode == "FastCBS":
+            generated_sequences = unwrapped_model.generate(
+                input_ids=encoder_input_ids,
+                attention_mask=encoder_attention_mask,
+                logits_processor=self.processors,
+                **gen_kwargs,
+            )
+        else:
+            generated_sequences = unwrapped_model.generate(
+                input_ids=encoder_input_ids,
+                attention_mask=encoder_attention_mask,
+                **gen_kwargs,
+            )
         # ===== 3. Reshape results =====
         batch_size = encoder_input_ids.shape[0]
         num_return_sequences = gen_kwargs["num_return_sequences"]

@@ -45,8 +45,10 @@ class BaseSeqRecDataset(Dataset):
         
         self.tokens_per_item = self._get_tokens_per_item()
         if config['use_user_tokens']:
+            self.use_user_tokens = True
             self.max_token_len = self.tokens_per_item * self.config['max_seq_len'] + 1
         else:
+            self.use_user_tokens = False
             self.max_token_len = self.tokens_per_item * self.config['max_seq_len']
         
         self.all_items = self._get_all_items()

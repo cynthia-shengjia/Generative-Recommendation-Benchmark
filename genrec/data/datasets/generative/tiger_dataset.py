@@ -60,9 +60,10 @@ class TigerDataset(BaseSeqRecDataset):
             source_tokens.extend(self._get_item_tokens(item))
         
         target_tokens = self._get_item_tokens(target_item)
-        
+        if self.use_user_tokens:
+            source_tokens = self.tokenizer.get_user_token(user_id) + source_tokens
         return {
-            'user_token': self.tokenizer.get_user_token(user_id),
+            # 'user_token': self.tokenizer.get_user_token(user_id),
             'source_tokens': source_tokens,
             'target_tokens': target_tokens,
             'target_id': target_item,
