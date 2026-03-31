@@ -68,7 +68,7 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, gen_type: str,
 
 @hydra.main(version_base=None, config_path="config", config_name="quantization")
 def main(cfg: DictConfig):
-    seed = getattr(cfg, 'seed', 42) 
+    seed = getattr(cfg, 'seed') 
     set_seed(seed)
 
     if "NNI_PLATFORM" in os.environ:
