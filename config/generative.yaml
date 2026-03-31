@@ -13,4 +13,5 @@ force_retrain_tokenizer: false
 force_retrain_model: false
 skip_tokenizer: false
 skip_model: false
+tokenizer_type: "tiger"
 seed: 42

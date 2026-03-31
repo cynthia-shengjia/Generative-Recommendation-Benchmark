@@ -303,7 +303,7 @@ def main(cfg: DictConfig):
     
     if not cfg.skip_tokenizer:
         tokenizer_success = stage1_train_tokenizer(
-            rqvae_config, output_dirs, gen_type=gen_type ,force_retrain=cfg.force_retrain_tokenizer, accelerator=accelerator
+            rqvae_config, output_dirs, gen_type=cfg.tokenizer_type ,force_retrain=cfg.force_retrain_tokenizer, accelerator=accelerator
         )
         if not tokenizer_success:
             if accelerator.is_main_process:
