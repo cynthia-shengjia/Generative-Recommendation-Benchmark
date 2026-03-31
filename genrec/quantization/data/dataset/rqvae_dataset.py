@@ -6,7 +6,7 @@ import torch
 import numpy as np
 from typing import Callable, Optional, Dict, List, Any, Tuple, Union
 from sentence_transformers import SentenceTransformer
-
+import os
 class ItemEmbeddingDataset(Dataset):
     """
     A dataset class for converting item text to embeddings using any Hugging Face Transformers model.
@@ -22,74 +22,55 @@ class ItemEmbeddingDataset(Dataset):
         max_seq_length: int = 512,
         device: Optional[str] = None
     ) -> None:
-        """
-        Initialize the dataset with item text data and a text encoder model.
-        
-        Args:
-            data_text_files: Path to the item text data pickle file
-            config: Configuration object
-            text_encoder_model: Name of the Hugging Face model to use for text encoding
-            embedding_extraction_strategy: Strategy for extracting embeddings from model output
-            max_seq_length: Maximum sequence length for tokenization
-            device: Device to run the model on (cuda/cpu)
-            
-        Returns:
-            None
-        """
         self.config = config
         self.data_text_files = data_text_files
         self.text_encoder_model_name = text_encoder_model
         self.embedding_strategy = embedding_extraction_strategy
         self.max_seq_length = max_seq_length
-        
-        # Set device
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        if 'sentence' in self.text_encoder_model_name.lower():
-            self.text_model = SentenceTransformer(self.text_encoder_model_name)
-            self.model_config = self.text_model[0].auto_model.config
-        elif 't5' in self.text_encoder_model_name.lower():
-            self.text_model = T5EncoderModel.from_pretrained(self.text_encoder_model_name)
-            self.model_config = self.text_model.config
-        else:
-            model_config = AutoConfig.from_pretrained(self.text_encoder_model_name)
-            if model_config.is_encoder_decoder:
-                # Load the full model and extract the encoder
-                full_model = AutoModel.from_pretrained(self.text_encoder_model_name)
-                self.text_model = full_model.encoder
-                self.model_config = full_model.config
-            else:
-                # Load encoder-only models directly
-                self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
-                self.model_config = self.text_model.config
-        # Load model config first to check architecture
-        # model_config = AutoConfig.from_pretrained(self.text_encoder_model_name)
-        # self.is_encoder_decoder = model_config.is_encoder_decoder
         
-        # Load text encoder model and tokenizer
-        self.text_tokenizer = AutoTokenizer.from_pretrained(self.text_encoder_model_name)
-        
-        # For encoder-decoder models, we'll only use the encoder part
-        # if self.is_encoder_decoder:
-        #     # Get the encoder part of the model
-        #     full_model = AutoModel.from_pretrained(self.text_encoder_model_name)
-        #     self.text_model = full_model.encoder
-        #     # Set model config for embedding dimension
-        #     self.model_config = full_model.config
-        # else:
-        #     self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
-        #     self.model_config = self.text_model.config
-            
-        self.text_model.to(self.device)
-        self.text_model.eval()
-
-        # Read item text information
         self.item_reviews = self._load_item_reviews()
-        
-        # Get all item IDs
         self.item_ids = list(self.item_reviews.keys())
         
-        # Transform item text to item embeddings
-        self.item_embeddings = self._transform_semantic_embeddings()
+        safe_model_name = self.text_encoder_model_name.replace('/', '_')
+        self.cache_path = f"{data_text_files}.{safe_model_name}.{self.embedding_strategy}.emb.pkl"
+
+        if os.path.exists(self.cache_path):
+            print(f"Loading cached embeddings from {self.cache_path}...")
+            with open(self.cache_path, 'rb') as f:
+                self.item_embeddings = pickle.load(f)
+            self.hidden_size = len(next(iter(self.item_embeddings.values())))
+            print(f"Successfully loaded {len(self.item_embeddings)} embeddings from cache.")
+        else:
+            print("No cache found. Loading text encoder model for inference...")
+            if 'sentence' in self.text_encoder_model_name.lower():
+                self.text_model = SentenceTransformer(self.text_encoder_model_name)
+                self.model_config = self.text_model[0].auto_model.config
+            elif 't5' in self.text_encoder_model_name.lower():
+                self.text_model = T5EncoderModel.from_pretrained(self.text_encoder_model_name)
+                self.model_config = self.text_model.config
+            else:
+                model_config = AutoConfig.from_pretrained(self.text_encoder_model_name)
+                if model_config.is_encoder_decoder:
+                    full_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+                    self.text_model = full_model.encoder
+                    self.model_config = full_model.config
+                else:
+                    self.text_model = AutoModel.from_pretrained(self.text_encoder_model_name)
+                    self.model_config = self.text_model.config
+                    
+            self.text_model.to(self.device)
+            self.text_model.eval()
+            self.hidden_size = self.model_config.hidden_size
+
+            self.item_embeddings = self._transform_semantic_embeddings()
+            
+            with open(self.cache_path, 'wb') as f:
+                pickle.dump(self.item_embeddings, f)
+            print(f"Saved embeddings to cache: {self.cache_path}")
+            
+            del self.text_model
+            torch.cuda.empty_cache()
     
     def set_embedding_extraction_strategy(self, strategy: str) -> None:
         """
@@ -298,33 +279,11 @@ class ItemEmbeddingDataset(Dataset):
         return len(self.item_ids)
     
     def __getitem__(self, index: int) -> Dict[str, Union[int, torch.Tensor, str]]:
-        """
-        Get a single item from the dataset.
-        
-        Args:
-            index: Index of the item to retrieve
-            
-        Returns:
-            Dictionary containing:
-                - item_id: ID of the item
-                - embedding: Tensor of the item's averaged embedding
-                - basic_info: Basic information text
-                - description: Description text
-                - text: Combined text (for backward compatibility)
-        """
-        # Get item ID
         item_id = self.item_ids[index]
-        
-        # Get item embedding and texts
-        embedding = self.item_embeddings.get(item_id, np.zeros(self.model_config.hidden_size))
+        embedding = self.item_embeddings.get(item_id, np.zeros(self.hidden_size))
         basic_info, description = self.item_reviews.get(item_id, ("", ""))
-        
-        # Combined text for backward compatibility
         combined_text = f"{basic_info} Description: {description}" if description else basic_info
-        
-        # Convert to tensor
         embedding_tensor = torch.tensor(embedding, dtype=torch.float32)
-        
         return {
             "item_id": item_id,
             "embedding": embedding_tensor,
@@ -392,7 +351,8 @@ def create_item_dataloader(
     config: Any,
     batch_size: int = 32,
     text_encoder_model: str = "t5-small",
-    embedding_strategy: str = "mean_pooling"
+    embedding_strategy: str = "mean_pooling",
+    num_workers: int = 4
 ) -> Tuple[ItemEmbeddingDataset, DataLoader]:
     """
     Create a DataLoader for the item embedding dataset.
@@ -420,7 +380,7 @@ def create_item_dataloader(
         dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        collate_fn=item_collate_fn
+        collate_fn=item_collate_fn,
     )
     
     return dataset, dataloader

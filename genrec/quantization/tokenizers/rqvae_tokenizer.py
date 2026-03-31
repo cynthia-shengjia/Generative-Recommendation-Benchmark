@@ -61,7 +61,8 @@ class RQVAETokenizer(AbstractTokenizer, nn.Module):
         return reconstructed_embeddings, indices, quant_loss
     def initialize_rqvae(self, embeddings: np.ndarray):
         self.log('[TOKENIZER] Initializing codebooks with K-Means...')
-        embeddings_tensor = torch.from_numpy(embeddings).to(self.config['device'])
+        current_device = next(self.parameters()).device
+        embeddings_tensor = torch.from_numpy(embeddings).to(current_device)
         self.rq_vae.vq_initialization(embeddings_tensor)
 
     def encode(self, embeddings: torch.Tensor) -> torch.Tensor:
@@ -160,7 +161,8 @@ class RQVAETokenizer(AbstractTokenizer, nn.Module):
 
         self.eval()
         with torch.no_grad():
-            all_embs_tensor = torch.from_numpy(sent_embs).to(self.config['device'])
+            current_device = next(self.parameters()).device
+            all_embs_tensor = torch.from_numpy(sent_embs).to(current_device)
             all_codes = self.encode(all_embs_tensor).cpu().numpy()
 
         item2sem_ids = {}
@@ -179,13 +181,15 @@ class RQVAETokenizer(AbstractTokenizer, nn.Module):
             for user_id in unique_user_ids:
                 self.user2tokens[user_id] = self._hash_user_id(user_id)
             self.log(f'[TOKENIZER] Processing complete. Mapped {len(self.user2tokens)} users.')
-        with open(self.save_path, 'w', encoding='utf-8') as f:
-            json.dump(self.item2tokens, f, ensure_ascii=False, indent=4)
-        with open(self.tokens2item_save_path, 'w', encoding='utf-8') as f:
-            str_keys_tokens2item = {str(k): v for k, v in self.tokens2item.items()}
-            json.dump(str_keys_tokens2item, f, ensure_ascii=False, indent=4)
-        with open(self.user_save_path, 'w', encoding='utf-8') as f:
-            json.dump(self.user2tokens, f, ensure_ascii=False, indent=4)
+        is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
+        if is_main_process:
+            with open(self.save_path, 'w', encoding='utf-8') as f:
+                json.dump(self.item2tokens, f, ensure_ascii=False, indent=4)
+            with open(self.tokens2item_save_path, 'w', encoding='utf-8') as f:
+                str_keys_tokens2item = {str(k): v for k, v in self.tokens2item.items()}
+                json.dump(str_keys_tokens2item, f, ensure_ascii=False, indent=4)
+            with open(self.user_save_path, 'w', encoding='utf-8') as f:
+                json.dump(self.user2tokens, f, ensure_ascii=False, indent=4)
     def _sem_ids_to_tokens(self, item2sem_ids: dict) -> dict:
         item2tokens = {}
         for item, sem_ids in item2sem_ids.items():
