@@ -76,7 +76,6 @@ class RQVAETrainingPipeline:
                     batch_size=per_device_batch_size,
                     text_encoder_model=self.config["text_encoder_model"],
                     embedding_strategy=self.config.get("embedding_strategy", "mean_pooling"),
-                    num_workers=self.config.get("num_workers", 4)
                 )
         else:
             dataset, dataloader = create_item_dataloader(
@@ -220,7 +219,5 @@ class RQVAETrainingPipeline:
         # self._initialize_codebooks()
         # self._train()
         self._finalize_and_verify()
-        tokenizer_save_path = self.config['tokenizer_path']
-        self.tokenizer.save(tokenizer_save_path)
         
         print("\n--- RQ-VAE Training Pipeline Finished Successfully ---")

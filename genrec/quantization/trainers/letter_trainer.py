@@ -12,14 +12,15 @@ class LETTERRQVAETrainer:
         self, 
         config: dict,  
         tokenizer: AbstractTokenizer,
-        optimizer: AbstractTokenizerOptimizer 
+        optimizer: AbstractTokenizerOptimizer,
+        accelerator = None 
     ):
         self.config   = config
         self.tokenizer  = tokenizer  
         self.optimizer = optimizer
-
+        self.accelerator = accelerator
         self.epochs = self.config.get('epochs')
-        self.device = torch.device(self.config.get('device'))
+        self.device = self.accelerator.device if self.accelerator else torch.device(self.config.get('device'))
         self.log_interval = self.config.get('log_interval')
         self.checkpoint_path = self.config.get('checkpoint_path')
         self.save_interval = self.config.get('save_interval')
@@ -33,10 +34,9 @@ class LETTERRQVAETrainer:
         self.best_epoch = 0
         logging.info(f"The best model will be saved based on the best value of '{self.save_best_on}'.")
 
-        os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
-        self.tokenizer.to(self.device)
-        self.optimizer.move_optimizer_state_to_device(self.device)
-        
+        if self.accelerator is None or self.accelerator.is_main_process:
+            os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
+            logging.info(f"The best model will be saved based on the best value of '{self.save_best_on}'.")
         self.labels = {"0": [], "1": [], "2": [], "3": [], "4": [], "5": [], "6": []}
 
         self.cf_emb_path = self.config.get('cf_emb_path')
@@ -52,37 +52,55 @@ class LETTERRQVAETrainer:
             raise FileNotFoundError(f"[ERROR] CF embedding path does not exist: {self.cf_emb_path}")
     def _calculate_codebook_utilization(self, train_dataloader, log_output=True):
         self.tokenizer.eval()
-        codebook_usage = [Counter() for _ in range(self.tokenizer.n_codebooks)]
+        
+        unwrapped_tokenizer = self.accelerator.unwrap_model(self.tokenizer) if self.accelerator else self.tokenizer
+        
+        codebook_usage = [Counter() for _ in range(unwrapped_tokenizer.n_codebooks)]
         total_samples = 0
+        
         with torch.no_grad():
             for _, embeddings in train_dataloader:
                 embeddings = embeddings.to(self.device)
-                indices = self.tokenizer.encode(embeddings)
-                for layer_idx in range(self.tokenizer.n_codebooks):
+                
+                indices = unwrapped_tokenizer.encode(embeddings)
+                
+                if self.accelerator is not None:
+                    indices = self.accelerator.gather_for_metrics(indices)
+                total_samples += indices.size(0)
+                
+                for layer_idx in range(unwrapped_tokenizer.n_codebooks):
                     layer_indices = indices[:, layer_idx].cpu().numpy()
                     for idx in layer_indices:
                         codebook_usage[layer_idx][idx] += 1
-                total_samples += embeddings.size(0)
         
-        utilization_rates = [len(usage) / self.tokenizer.codebook_size for usage in codebook_usage]
+        utilization_rates = [len(usage) / unwrapped_tokenizer.codebook_size for usage in codebook_usage]
+        
         if log_output:
             for i, rate in enumerate(utilization_rates):
-                logging.info(f"Layer {i + 1}: {len(codebook_usage[i])}/{self.tokenizer.codebook_size} codes used, "
+                logging.info(f"Layer {i + 1}: {len(codebook_usage[i])}/{unwrapped_tokenizer.codebook_size} codes used, "
                              f"utilization rate: {rate:.4f}")
         avg_utilization = np.mean(utilization_rates)
         if log_output:
             logging.info(f"Average codebook utilization rate: {avg_utilization:.4f}")
+            
         return utilization_rates, avg_utilization
 
     def _calculate_collision_rate(self, train_dataloader, log_output=True):
         self.tokenizer.eval()
+        
+        unwrapped_tokenizer = self.accelerator.unwrap_model(self.tokenizer) if self.accelerator else self.tokenizer
+        
         indices_set = set()
         total_samples = 0
         with torch.no_grad():
             for _, embeddings in train_dataloader:
                 embeddings = embeddings.to(self.device)
-                indices = self.tokenizer.encode(embeddings)
-                total_samples += embeddings.size(0)
+                
+                indices = unwrapped_tokenizer.encode(embeddings)
+                
+                if self.accelerator is not None:
+                    indices = self.accelerator.gather_for_metrics(indices)
+                total_samples += indices.size(0)
                 cpu_indices = indices.cpu().numpy()
                 for index_tuple in cpu_indices:
                     code = "-".join(map(str, index_tuple))
@@ -97,6 +115,7 @@ class LETTERRQVAETrainer:
             logging.info(f"Collision Analysis: {total_samples - len(indices_set)} collisions found for {total_samples} samples.")
             logging.info(f"Total Unique Codes: {len(indices_set)}")
             logging.info(f"Collision rate: {collision_rate:.4f}")
+            
         return collision_rate
     def constrained_km(self, data, n_cluster=10):
         x = data
@@ -138,8 +157,11 @@ class LETTERRQVAETrainer:
 
 
     def _save_checkpoint(self, epoch, metric_value=None, is_best=False, utilization_rate=None, collision_rate=None):
+        if self.accelerator is not None and not self.accelerator.is_main_process:
+            return None
+        model_to_save = self.accelerator.unwrap_model(self.tokenizer) if self.accelerator else self.tokenizer
         if is_best:
-            torch.save(self.tokenizer.state_dict(), self.checkpoint_path)
+            torch.save(model_to_save.state_dict(), self.checkpoint_path)
             logging.info(f"Best model saved to {self.checkpoint_path} ({self.save_best_on}: {metric_value:.4f})")
             return self.checkpoint_path
         else:
@@ -150,22 +172,40 @@ class LETTERRQVAETrainer:
             else:
                 checkpoint_filename = f"{base_path}_epoch{epoch+1}{ext}"
                 
-            torch.save(self.tokenizer.state_dict(), checkpoint_filename)
+            torch.save(model_to_save.state_dict(), checkpoint_filename)
             logging.info(f"Checkpoint saved to {checkpoint_filename}")
             return checkpoint_filename
 
     def fit(self, train_dataloader):
         logging.info("Start Training Tokenizer...")
+        is_main = self.accelerator is None or self.accelerator.is_main_process
+        if is_main:
+            logging.info("Start Training Tokenizer...")
+        if self.accelerator is not None:
+            actual_optimizer = self.optimizer.optimizer if hasattr(self.optimizer, 'optimizer') else self.optimizer
+            
+            self.tokenizer, actual_optimizer, prepared_dl = self.accelerator.prepare(
+                self.tokenizer, actual_optimizer, train_dataloader.dl
+            )
+            train_dataloader.dl = prepared_dl
+            
+            if hasattr(self.optimizer, 'optimizer'):
+                self.optimizer.optimizer = actual_optimizer
+            else:
+                self.optimizer = actual_optimizer
         for epoch in range(self.epochs):
             train_loss, train_recon, train_commit, train_cf = self._train_one_epoch(train_dataloader, epoch)
-            logging.info(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | "
+            if is_main:
+                logging.info(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | "
                          f"Train Recon Loss: {train_recon:.4f} | Train Commit Loss: {train_commit:.4f} | Train CF Loss: {train_cf:.4f}")
 
             if (epoch + 1) % 1000 == 0:
-                logging.info(f"\n=== Metrics Analysis at Epoch {epoch+1} ===")
+                if is_main:
+                    logging.info(f"\n=== Metrics Analysis at Epoch {epoch+1} ===")
                 self._calculate_codebook_utilization(train_dataloader, log_output=True)
                 self._calculate_collision_rate(train_dataloader, log_output=True)
-                logging.info("=" * 60)
+                if is_main:
+                    logging.info("=" * 60)
 
             if (epoch + 1) % self.save_interval == 0:
                 _, avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=False)
@@ -182,14 +222,16 @@ class LETTERRQVAETrainer:
                     self.best_metric_value = comparable_metric
                     self.best_epoch = epoch
                     self._save_checkpoint(epoch, metric_value=original_metric_for_log, is_best=True)
-                    logging.info(f"New best model found at epoch {epoch+1} with {self.save_best_on}: {original_metric_for_log:.4f}")
+                    if is_main:
+                        logging.info(f"New best model found at epoch {epoch+1} with {self.save_best_on}: {original_metric_for_log:.4f}")
                 
                 self._save_checkpoint(epoch, utilization_rate=avg_utilization, collision_rate=collision_rate) 
-                        
-        logging.info("\n=== Final Metrics Analysis ===")
+        if is_main:               
+            logging.info("\n=== Final Metrics Analysis ===")
         _, final_avg_utilization = self._calculate_codebook_utilization(train_dataloader, log_output=True)
         final_collision_rate = self._calculate_collision_rate(train_dataloader, log_output=True)
-        logging.info("=" * 60)
+        if is_main:
+            logging.info("=" * 60)
         
         self._save_checkpoint(self.epochs - 1, utilization_rate=final_avg_utilization, collision_rate=final_collision_rate)
         
@@ -204,10 +246,13 @@ class LETTERRQVAETrainer:
             self.best_metric_value = final_comparable_metric
             self.best_epoch = self.epochs - 1
             self._save_checkpoint(self.epochs - 1, metric_value=final_original_metric, is_best=True)
-            logging.info(f"Final model is the best with {self.save_best_on}: {final_original_metric:.4f}")
+            if is_main:
+                logging.info(f"Final model is the best with {self.save_best_on}: {final_original_metric:.4f}")
         else:
             best_original_value = self.best_metric_value if self.save_best_on == 'utilization' else 1.0 - self.best_metric_value
-            logging.info(f"Best model was at epoch {self.best_epoch+1} with {self.save_best_on}: {best_original_value:.4f}")
+            if is_main:
+                logging.info(f"Best model was at epoch {self.best_epoch+1} with {self.save_best_on}: {best_original_value:.4f}")
         
         best_original_value_final = self.best_metric_value if self.save_best_on == 'utilization' else 1.0 - self.best_metric_value
-        logging.info(f"Training complete. Best {self.save_best_on}: {best_original_value_final:.4f} at epoch {self.best_epoch+1}")
+        if is_main:
+            logging.info(f"Training complete. Best {self.save_best_on}: {best_original_value_final:.4f} at epoch {self.best_epoch+1}")

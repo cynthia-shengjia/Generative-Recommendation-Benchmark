@@ -76,23 +76,28 @@ class RQVAETokenizer(AbstractTokenizer, nn.Module):
         return self.rq_vae.get_indices(embeddings)
 
 
-    # @property
-    # def max_token_seq_len(self) -> int:
-    #     return self.config['max_item_seq_len'] * self.n_codebooks + 1
-    def save(self, filepath):
-        if hasattr(self, 'rq_vae'):
-            self.rq_vae.to('cpu')
-            
-        with open(filepath, 'wb') as f:
-            pickle.dump(self, f)
-        print(f"Tokenizer object saved to {filepath}")
+    @classmethod
+    def load(cls, config):
+        tokenizer = cls(config)
+        if os.path.exists(tokenizer.save_path):
+            with open(tokenizer.save_path, 'r', encoding='utf-8') as f:
+                loaded_item_data = json.load(f)
+                tokenizer.item2tokens = {int(k): tuple(v) for k, v in loaded_item_data.items()}
+                
+        if os.path.exists(tokenizer.tokens2item_save_path):
+            with open(tokenizer.tokens2item_save_path, 'r', encoding='utf-8') as f:
+                loaded_tokens_data = json.load(f)
+                tokenizer.tokens2item = {tuple(map(int, k.strip('()').split(','))): v 
+                                         for k, v in loaded_tokens_data.items()}
+                                         
+        if os.path.exists(tokenizer.user_save_path):
+            with open(tokenizer.user_save_path, 'r', encoding='utf-8') as f:
+                loaded_user_data = json.load(f)
+                tokenizer.user2tokens = {int(k): v for k, v in loaded_user_data.items()}
+                if tokenizer.user2tokens:
+                    tokenizer.user_token_start_idx = min(tokenizer.user2tokens.values())
 
-    @staticmethod
-    def load(filepath):
-
-        with open(filepath, 'rb') as f:
-            tokenizer = pickle.load(f)
-        print(f"Tokenizer object loaded from {filepath}")
+        print(f"Tokenizer loaded successfully from JSON files based on config path: {tokenizer.save_path}")
         return tokenizer
     @property
     def vocab_size(self) -> int:
