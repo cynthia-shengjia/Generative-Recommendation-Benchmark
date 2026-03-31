@@ -52,7 +52,7 @@ def stage1_train_tokenizer(rqvae_config: dict, output_dirs: dict, gen_type: str,
     tokenizer_checkpoint = rqvae_config['checkpoint_path']
     item2tokens_path = rqvae_config['save_path']
     
-    if not force_retrain and os.path.exists(tokenizer_checkpoint) and os.path.exists(item2tokens_path):
+    if not force_retrain and os.path.exists(item2tokens_path):
         print(f"exist tokenizer checkpoint: {tokenizer_checkpoint}")
         print("skip tokenizer training...")
         return True
