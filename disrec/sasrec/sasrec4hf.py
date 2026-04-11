@@ -107,12 +107,12 @@ class SASRec4HF(PreTrainedModel):
                 logits = logits / self.config.temperature
                 
         else:
-            if self.config.loss_type = "BCE":
+            if self.config.loss_type == "BCE":
                 last_hidden_state = sequence_hidden_states[:, -1:, :] # [B, 1, D]
                 last_labels = labels[:, -1:] # [B, 1]
                 loss = self.compute_loss(last_hidden_state, last_labels, input_ids, item_embeddings)
                 logits = None
-            elif self.config.loss_type = "softmax":
+            elif self.config.loss_type == "softmax":
                 last_hidden_state = sequence_hidden_states[:, -1, :]
                 logits = torch.matmul(last_hidden_state, item_embeddings.t())
                 if self.SASRec.config.norm_emb:
