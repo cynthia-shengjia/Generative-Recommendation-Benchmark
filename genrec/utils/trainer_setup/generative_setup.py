@@ -10,7 +10,7 @@ from genrec.utils.metrics import compute_metrics
 from genrec.utils.callbacks.generative.generative_callback import (
     GenerativeLoggingCallback,
     EvaluateEveryNEpochsCallback,
-    DelayedEvaluateEveryNEpochsCallback
+    DelayedEvaluateEveryNEpochsCallback,
 )
 
 def setup_training(
@@ -29,6 +29,9 @@ def setup_training(
 ):
     
     training_args = TrainingArguments(
+        seed=model_config['seed'],
+        data_seed=model_config['seed'],
+        lr_scheduler_type="cosine",
         output_dir=output_dirs['model'],
         num_train_epochs=model_config['num_epochs'],
         per_device_train_batch_size=per_device_train_batch_size,
@@ -73,7 +76,7 @@ def setup_training(
         ),
         GenerativeLoggingCallback(logger),
         # start_epoch means when to start evaluate
-        DelayedEvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5), start_epoch=0)
+        DelayedEvaluateEveryNEpochsCallback(n_epochs=model_config.get("evaluation_epoch", 5), start_epoch=40),
     ]
     
     trainer_partial = instantiate(generative_config.trainer)
